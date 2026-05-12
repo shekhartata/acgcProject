@@ -1,0 +1,34 @@
+# Binaries
+bin/
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Environment and secrets
+.env
+*.pem
+*.key
+
+# Test outputs
+stresstest/results.json
+stresstest/testdata/
+
+# Go
+vendor/
+*.test
+__debug_bin*
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temporary
+/tmp/
