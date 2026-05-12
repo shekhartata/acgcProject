@@ -2,7 +2,7 @@ PROTO_DIR := proto
 API_DIR := api/proto
 BINARY := acgc
 
-.PHONY: proto build run test clean tidy lint mongo mongo-down mongo-logs stresstest
+.PHONY: proto build run test clean tidy lint mongo mongo-down mongo-logs stresstest eval eval-cached eval-judge
 
 # --- Build ---
 
@@ -16,6 +16,7 @@ build:
 	go build -o bin/$(BINARY) ./cmd/acgc
 	go build -o bin/testcli ./cmd/testcli
 	go build -o bin/stresstest ./stresstest
+	go build -o bin/eval ./eval
 
 run: build
 	./bin/$(BINARY)
@@ -60,6 +61,24 @@ stresstest:
 
 stresstest-export:
 	go run ./stresstest/ -export stresstest/results.json
+
+# --- Quality / Intelligence-per-token Eval ---
+
+# Live run with probe-based scoring only (no judge). Requires ACGC_LLM_API_KEY.
+eval:
+	go run ./eval -v
+
+# Live run with LLM-as-judge enabled for open-ended scenarios. Spends more tokens.
+eval-judge:
+	go run ./eval -v -judge
+
+# Replay scored results from cache only — does NOT call the API. Free.
+eval-cached:
+	go run ./eval -cache-only
+
+# Wipe cached responses (forces fresh API calls on next run).
+eval-clean:
+	rm -rf eval/cache eval/results
 
 # --- Full Stack ---
 

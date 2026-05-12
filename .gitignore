@@ -14,6 +14,9 @@ bin/
 stresstest/results.json
 stresstest/testdata/
 
+# Eval runtime cache (LLM response cache, regenerable, not source)
+eval/cache/
+
 # Go
 vendor/
 *.test
