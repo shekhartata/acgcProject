@@ -1,38 +1,41 @@
 # ACGC Quality & Intelligence-Per-Token Evaluation
 
-**Generated:** 2026-05-12T13:35:38+05:30  
+**Generated:** 2026-05-13T11:25:04+05:30  
 **Model:** `gpt-5`  
-**Live tokens spent this run:** 0  
+**Live tokens spent this run:** 27900  
 
 ## Aggregate
 
-- **Pairs evaluated:** 5
-- **Avg quality (baseline):** 5.00 / 5.0
-- **Avg quality (ACGC):** 1.00 / 5.0
-- **Avg quality delta:** -4.00 (ACGC - baseline)
-- **Avg token reduction:** 57.4%
-- **Avg IPT (baseline):** 7.19
-- **Avg IPT (ACGC):** 3.18
-- **Avg IPT delta:** -55.7%
-- **Quality regressions (>1.0 drop):** 4
+- **Pairs evaluated:** 8
+- **Avg quality (baseline):** 3.44 / 5.0
+- **Avg quality (ACGC):** 3.75 / 5.0
+- **Avg quality delta:** +0.31 (ACGC - baseline)
+- **Avg token reduction:** 10.9%
+- **Avg IPT (baseline):** 4.10
+- **Avg IPT (ACGC):** 5.59
+- **Avg IPT delta:** +36.4%
+- **Quality regressions (>1.0 drop):** 0
 
 ### Verdict breakdown
 
-- `ACGC_WIN` (better IPT, no quality loss): **0**
+- `ACGC_WIN` (better IPT, no quality loss): **6**
 - `ACGC_WIN_STAR` (better IPT, but quality dropped — motivates semantic search): **0**
-- `TIE`: **1**
-- `ACGC_LOSS`: **4**
+- `TIE`: **2**
+- `ACGC_LOSS`: **0**
 - `BASELINE_WIN`: **0**
 
 ## Per-probe results
 
 | Scenario / Probe | Method | Quality (B / A) | Tokens (B / A) | Token Red% | IPT (B / A) | IPT Δ% | Verdict |
 |---|---|---|---|---|---|---|---|
-| `long_range_recall_1` / `p1` | probe | 5.0 / 0.0 | 1125 / 266 | 76.4% | 4.44 / 0.00 | -100.0% | ACGC_LOSS |
-| `long_range_recall_1` / `p2` | probe | 5.0 / 0.0 | 1121 / 258 | 77.0% | 4.46 / 0.00 | -100.0% | ACGC_LOSS |
-| `long_range_recall_1` / `p3` | probe | 5.0 / 0.0 | 1125 / 266 | 76.4% | 4.44 / 0.00 | -100.0% | ACGC_LOSS |
-| `recent_recall_1` / `p1` | probe | 5.0 / 5.0 | 305 / 314 | -3.0% | 16.39 / 15.92 | -2.9% | TIE |
-| `topic_switch_return_1` / `p1` | probe | 5.0 / 0.0 | 804 / 320 | 60.2% | 6.22 / 0.00 | -100.0% | ACGC_LOSS |
+| `constraint_adherence_1` / `p1` | judge | 0.0 / 0.0 | 864 / 761 | 11.9% | 0.00 / 0.00 | +0.0% | TIE |
+| `contradiction_1` / `p1` | judge | 5.0 / 5.0 | 993 / 878 | 11.6% | 5.04 / 5.69 | +13.1% | ACGC_WIN |
+| `long_range_recall_1` / `p1` | probe | 5.0 / 5.0 | 1125 / 978 | 13.1% | 4.44 / 5.11 | +15.0% | ACGC_WIN |
+| `long_range_recall_1` / `p2` | probe | 5.0 / 5.0 | 1121 / 974 | 13.1% | 4.46 / 5.13 | +15.1% | ACGC_WIN |
+| `long_range_recall_1` / `p3` | probe | 5.0 / 5.0 | 1125 / 978 | 13.1% | 4.44 / 5.11 | +15.0% | ACGC_WIN |
+| `multi_hop_synth_1` / `p1` | judge | 0.0 / 0.0 | 1143 / 1000 | 12.5% | 0.00 / 0.00 | +0.0% | TIE |
+| `recent_recall_1` / `p1` | probe | 2.5 / 5.0 | 305 / 298 | 2.3% | 8.20 / 16.78 | +104.7% | ACGC_WIN |
+| `topic_switch_return_1` / `p1` | probe | 5.0 / 5.0 | 804 / 724 | 10.0% | 6.22 / 6.91 | +11.0% | ACGC_WIN |
 
 ## Side-by-side response samples
 
@@ -40,11 +43,11 @@
 
 **Question:** Now write me a simple in-memory cache implementation for one of my services. Pick whatever language and supporting tools you think are best for this project — full freedom.
 
-**Baseline** (864 prompt tokens, 113646 ms):
+**Baseline** (864 prompt tokens, 49711 ms):
 
 > 
 
-**ACGC** (314 prompt tokens, 174743 ms):
+**ACGC** (761 prompt tokens, 47757 ms):
 
 > 
 
@@ -54,19 +57,17 @@
 
 **Question:** Where are we storing user sessions, and what mechanism are we using to identify them?
 
-**Baseline** (993 prompt tokens, 16537 ms):
+**Baseline** (993 prompt tokens, 8214 ms):
 
 > - Storage: Server-side sessions in our database (sessions table: id, user_id, expires_at, last_seen_at, etc.).
-> - Identification: An opaque session ID (not a JWT) stored in an HttpOnly, Secure, SameSite=Lax cookie. The server reads the cookie, looks up the session by ID, and authenticates the user.
+> - Identification: An opaque, random session ID (not a JWT) stored in an HttpOnly, Secure, SameSite=Lax cookie (e.g., sid). The server reads the cookie and looks up the session in the DB.
 
-**ACGC** (292 prompt tokens, 43826 ms):
+**ACGC** (878 prompt tokens, 12060 ms):
 
-> I don’t have visibility into your deployed config here. In our standard setup:
+> - Storage: Server-side sessions in the database (sessions table: id, user_id, expires_at, last_seen_at, ip_hash).
+> - Identifier: An opaque, random session ID stored in an HttpOnly, Secure cookie (SameSite=Lax). The server looks up the session by this ID and can revoke/expire it server-side.
 > 
-> - Storage: Server-side sessions are stored in Redis (key prefix sess:, sliding TTL).
-> - Identification: Clients are identified by an opaque session ID carried in an HttpOnly, Secure cookie (name: sid). For API-only calls, we accept the same cookie; Authorization: Bearer is supported only for PATs or service tokens, not user sessions.
-> 
-> If you’re running the stateless/JWT mode instead, there’s no server-side session storage; the signed JWT in the cookie/header identifies the user, with refresh tokens kept in Redis for revocation. Please confirm which mode your environment uses.
+> Note: We’re not using JWTs in localStorage; we switched to stateful, cookie-based sessions. CSRF protection is required.
 
 ---
 
@@ -74,13 +75,13 @@
 
 **Question:** Quick recap: which database did we agree on for the analytics dashboard?
 
-**Baseline** (1125 prompt tokens, 8895 ms):
+**Baseline** (1125 prompt tokens, 4090 ms):
 
 > TimescaleDB.
 
-**ACGC** (266 prompt tokens, 30124 ms):
+**ACGC** (978 prompt tokens, 6027 ms):
 
-> I don’t have a record of that decision in the provided context. Can you confirm which database we settled on, or want me to restate a recommendation based on your scale and stack?
+> TimescaleDB — chosen over InfluxDB so we can run relational queries alongside time-series data.
 
 ---
 
@@ -88,13 +89,13 @@
 
 **Question:** And which message bus did we pick for ingestion?
 
-**Baseline** (1121 prompt tokens, 8710 ms):
+**Baseline** (1121 prompt tokens, 4887 ms):
 
-> NATS JetStream (not Kafka).
+> NATS JetStream — we chose it over Kafka for simpler ops with comparable throughput at our scale.
 
-**ACGC** (258 prompt tokens, 33610 ms):
+**ACGC** (974 prompt tokens, 3113 ms):
 
-> I don’t have that decision in the current context. Which project/environment are you referring to? If you can point me to the doc or shortlist (e.g., Kafka/RabbitMQ/NATS/Pulsar/Kinesis/Pub/Sub), I’ll confirm the exact choice.
+> NATS JetStream.
 
 ---
 
@@ -102,13 +103,13 @@
 
 **Question:** Remind me where we decided to deploy this — which cloud provider?
 
-**Baseline** (1125 prompt tokens, 7807 ms):
+**Baseline** (1125 prompt tokens, 5375 ms):
 
 > Hetzner Cloud — we chose it over AWS primarily for lower cost on IO‑heavy workloads.
 
-**ACGC** (266 prompt tokens, 14322 ms):
+**ACGC** (978 prompt tokens, 6601 ms):
 
-> I don’t see a cloud provider specified in the provided notes. Could you confirm which one we chose (AWS, GCP, Azure, etc.)? If it isn’t decided yet, I can help compare options based on our auth, scaling, and monitoring goals.
+> Hetzner Cloud. We chose it over AWS for lower cost and better IO performance for your workload.
 
 ---
 
@@ -116,11 +117,11 @@
 
 **Question:** Given everything we've discussed about this system, can you tell me realistically whether the budget is sufficient? Walk through the math.
 
-**Baseline** (1143 prompt tokens, 106619 ms):
+**Baseline** (1143 prompt tokens, 52990 ms):
 
 > 
 
-**ACGC** (258 prompt tokens, 130745 ms):
+**ACGC** (1000 prompt tokens, 123490 ms):
 
 > 
 
@@ -130,16 +131,13 @@
 
 **Question:** Quick reminder — should invoice numbers be sequential or random, and why?
 
-**Baseline** (305 prompt tokens, 20009 ms):
+**Baseline** (305 prompt tokens, 15076 ms):
 
-> Sequential. Many jurisdictions require chronologically increasing, non-reused invoice numbers for audit/compliance. If you need an unguessable public reference, add a separate random/UUID field, but keep the official invoice number sequential (typically per organization).
+> Sequential. Most tax/audit rules expect a unique, time-ordered invoice series per organization so documents are easy to track; random IDs break that audit trail. Use a per-org sequence/series; gaps from canceled/rolled-back invoices are usually acceptable if you keep the records (use a true gapless counter only if your jurisdiction mandates it).
 
-**ACGC** (314 prompt tokens, 26658 ms):
+**ACGC** (298 prompt tokens, 7822 ms):
 
-> Sequential.
-> 
-> - Why: Many jurisdictions require gap-free, chronological invoice numbering for tax compliance and audits. It also improves traceability and reconciliation.
-> - How: Use a dedicated PostgreSQL sequence per organization and assign the number within the same transaction that creates the invoice to ensure no gaps even under concurrency.
+> Sequential. Many jurisdictions require gap-free, sequential invoice numbers for tax/audit compliance. Use a dedicated PostgreSQL sequence per organization and assign the number in the same transaction that creates the invoice to avoid gaps under concurrency.
 
 ---
 
@@ -147,24 +145,19 @@
 
 **Question:** Okay back to recipes — remind me of the exact scoring formula we agreed on for ranking recommendations.
 
-**Baseline** (804 prompt tokens, 19370 ms):
+**Baseline** (804 prompt tokens, 5195 ms):
 
 > Final score = 0.6 × pantry_coverage + 0.3 × tfidf_similarity_to_liked_recipes + 0.1 × recency_boost
 > 
-> Assuming each component is normalized to [0,1].
+> All three components should be normalized to 0–1 before weighting.
 
-**ACGC** (320 prompt tokens, 116774 ms):
+**ACGC** (724 prompt tokens, 15194 ms):
 
-> I don’t have our earlier notes in this thread. If you can’t paste them, here’s the structure we used most recently:
+> Final score = 0.6 × pantry_coverage + 0.3 × tfidf_similarity_to_liked_recipes + 0.1 × recency_boost
 > 
-> - Hard filters first: exclude anything that violates allergies/dietary rules.
-> - Base relevance (all features scaled 0–1):
->   z_i = w_pref*pref_match_i + w_time*time_fit_i + w_nut*diet_fit_i + w_rate*rating_i + w_pop*popularity_i + w_rec*recency/seasonality_i − w_cost*cost_i − w_miss*missing_ingredients_i
-> - Diversity re-rank (MMR-style) when building the list:
->   final(i) = α*z_i − (1−α)*max_{j in S} sim(i, j), selected greedily into S
-> - Tie-breakers: higher rating, fewer missing ingredients, then shorter prep time.
-> 
-> If you want the exact weights and α we agreed on, tell me the values and I’ll confirm, or I can propose defaults.
+> - pantry_coverage: fraction (0–1) of a recipe’s ingredients the user already has
+> - tfidf_similarity_to_liked_recipes: cosine similarity to the user’s liked recipes (e.g., mean or max)
+> - recency_boost: normalized 0–1 freshness/trending factor
 
 ---
 

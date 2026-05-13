@@ -9,18 +9,27 @@ import (
 
 	"github.com/chandrashekhartata/acgc/internal/compiler"
 	"github.com/chandrashekhartata/acgc/internal/domain"
+	"github.com/chandrashekhartata/acgc/internal/embedding"
 	"github.com/chandrashekhartata/acgc/internal/gc"
 	"github.com/chandrashekhartata/acgc/internal/scorer"
 	"github.com/chandrashekhartata/acgc/internal/statetree"
 	"github.com/chandrashekhartata/acgc/internal/store"
+	"github.com/chandrashekhartata/acgc/internal/vectorindex"
 )
 
 type SessionState struct {
-	Tree          *statetree.Tree
-	Metrics       *domain.SessionMetrics
-	EventChan     chan *domain.Event
-	LastActivity  time.Time
-	Cancel        context.CancelFunc
+	Tree         *statetree.Tree
+	Metrics      *domain.SessionMetrics
+	EventChan    chan *domain.Event
+	LastActivity time.Time
+	Cancel       context.CancelFunc
+
+	// Semantic scoring per-session state. ActiveIndex serves live active-set
+	// lookups; ArchiveIndex retains vectors for archived nodes swept off the
+	// active index. Either is non-nil iff the manager has an embedder.
+	ActiveIndex       vectorindex.Index
+	ArchiveIndex      vectorindex.Index
+	LastUserEmbedding []float32
 }
 
 type Manager struct {
@@ -33,6 +42,12 @@ type Manager struct {
 	channelBuffer  int
 	idleTimeout    time.Duration
 	snapshotEvery  time.Duration
+
+	embedder       embedding.Provider
+	semanticWeight float64
+	topKAtCompile  int
+	archiveTopK    int
+	hnswConfig     vectorindex.Config
 }
 
 type ManagerConfig struct {
@@ -43,9 +58,25 @@ type ManagerConfig struct {
 	ChannelBuffer  int
 	IdleTimeoutS   int
 	SnapshotEveryS int
+
+	// Optional. When Embedder is nil, all semantic ops are skipped and the
+	// system behaves identically to the pre-semantic version.
+	Embedder             embedding.Provider
+	SemanticWeight       float64
+	TopKAtCompile        int
+	ArchiveTopKAtCompile int
+	HNSWConfig           vectorindex.Config
 }
 
 func NewManager(cfg ManagerConfig) *Manager {
+	topK := cfg.TopKAtCompile
+	if topK <= 0 {
+		topK = 12
+	}
+	archK := cfg.ArchiveTopKAtCompile
+	if archK <= 0 {
+		archK = 12
+	}
 	return &Manager{
 		sessions:       make(map[string]*SessionState),
 		store:          cfg.Store,
@@ -55,7 +86,16 @@ func NewManager(cfg ManagerConfig) *Manager {
 		channelBuffer:  cfg.ChannelBuffer,
 		idleTimeout:    time.Duration(cfg.IdleTimeoutS) * time.Second,
 		snapshotEvery:  time.Duration(cfg.SnapshotEveryS) * time.Second,
+		embedder:       cfg.Embedder,
+		semanticWeight: cfg.SemanticWeight,
+		topKAtCompile:  topK,
+		archiveTopK:    archK,
+		hnswConfig:     cfg.HNSWConfig,
 	}
+}
+
+func (m *Manager) semanticEnabled() bool {
+	return m.embedder != nil
 }
 
 // GetOrCreate returns an existing session or creates a new one.
@@ -102,39 +142,103 @@ func (m *Manager) GetOrCreate(ctx context.Context, sessionID, taskID string) *Se
 		Cancel:       cancel,
 	}
 
+	// Build the per-session HNSW index if semantic scoring is enabled.
+	// On rehydration, prime it with whatever embeddings Mongo already has.
+	if m.semanticEnabled() {
+		state.ActiveIndex = vectorindex.NewHNSW(m.hnswConfig)
+		state.ArchiveIndex = vectorindex.NewHNSW(m.hnswConfig)
+		if vecs, err := m.store.LoadNodeEmbeddings(ctx, sessionID); err != nil {
+			log.Printf("session: failed to load active embeddings for %s: %v", sessionID, err)
+		} else if len(vecs) > 0 {
+			if err := state.ActiveIndex.RebuildFromVectors(vecs); err != nil {
+				log.Printf("session: failed to rebuild active HNSW for %s: %v", sessionID, err)
+			} else {
+				log.Printf("session: rehydrated active HNSW for %s (%d vectors)", sessionID, len(vecs))
+			}
+		}
+		if avecs, err := m.store.LoadArchivedNodeEmbeddings(ctx, sessionID); err != nil {
+			log.Printf("session: failed to load archived embeddings for %s: %v", sessionID, err)
+		} else if len(avecs) > 0 {
+			if err := state.ArchiveIndex.RebuildFromVectors(avecs); err != nil {
+				log.Printf("session: failed to rebuild archive HNSW for %s: %v", sessionID, err)
+			} else {
+				log.Printf("session: rehydrated archive HNSW for %s (%d vectors)", sessionID, len(avecs))
+			}
+		}
+	}
+
 	m.sessions[sessionID] = state
 
-	// Launch the single-writer worker for this session
 	go m.sessionWorker(workerCtx, sessionID, state)
 
 	return state
 }
 
 // CompilePrompt reads the current state and builds an optimized prompt (sync, fast path).
+//
+// When semantic scoring is enabled, the imminent user message is embedded and
+// queried against the per-session ActiveIndex and ArchiveIndex. The compiler
+// re-blends scores in a single pass, boosting nodes semantically close to the
+// current query — including archived nodes when they match.
 func (m *Manager) CompilePrompt(sessionID, taskID, userMessage, systemPrompt string) *domain.CompiledPrompt {
 	m.mu.RLock()
 	state, ok := m.sessions[sessionID]
 	m.mu.RUnlock()
 
 	if !ok {
-		// No session state — pass through with just the user message
+		// Session-not-found fallback: keep system + probe on the side so
+		// callers (gateway, eval) emit them as their own chat messages.
+		// FinalPrompt is empty because there's no context to assemble — the
+		// gateway will skip the body user message and just send the probe.
 		return &domain.CompiledPrompt{
 			CompiledPromptID:   fmt.Sprintf("cp_%d", time.Now().UnixNano()),
 			SessionID:          sessionID,
 			TaskID:             taskID,
 			CurrentUserMessage: userMessage,
-			FinalPrompt:        systemPrompt + "\n\n" + userMessage,
-			OriginalTokenCount: estimateTokens(systemPrompt + userMessage),
-			CompiledTokenCount: estimateTokens(systemPrompt + userMessage),
+			SystemPrompt:       systemPrompt,
+			FinalPrompt:        "",
+			OriginalTokenCount: estimateTokens(systemPrompt) + estimateTokens(userMessage),
+			CompiledTokenCount: estimateTokens(systemPrompt) + estimateTokens(userMessage),
 			CreatedAt:          time.Now(),
 		}
 	}
 
 	activeNodes := state.Tree.GetActiveNodes()
-
-	// Use pre-computed scores — don't re-score on the hot path
 	comp := compiler.NewCompiler(m.compilerBudget)
-	return comp.Compile(sessionID, taskID, userMessage, activeNodes, systemPrompt)
+
+	// Heuristic-only fast path: no embedder, no index, or no user message.
+	if !m.semanticEnabled() || state.ActiveIndex == nil || state.ArchiveIndex == nil || userMessage == "" {
+		return comp.Compile(sessionID, taskID, userMessage, activeNodes, systemPrompt)
+	}
+
+	// Per-compile semantic re-blend. On any failure, fall back to the
+	// heuristic path so the hot path always returns a prompt.
+	embedCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	queryVec, err := m.embedder.Embed(embedCtx, userMessage)
+	if err != nil {
+		log.Printf("session: compile-time embed failed for %s: %v", sessionID, err)
+		return comp.Compile(sessionID, taskID, userMessage, activeNodes, systemPrompt)
+	}
+
+	ka := m.topKAtCompile
+	kz := m.archiveTopK
+	hitsA, err := state.ActiveIndex.Query(queryVec, ka)
+	if err != nil {
+		log.Printf("session: active HNSW query failed for %s: %v", sessionID, err)
+		return comp.Compile(sessionID, taskID, userMessage, activeNodes, systemPrompt)
+	}
+	hitsZ, err := state.ArchiveIndex.Query(queryVec, kz)
+	if err != nil {
+		log.Printf("session: archive HNSW query failed for %s: %v", sessionID, err)
+		return comp.Compile(sessionID, taskID, userMessage, activeNodes, systemPrompt)
+	}
+	merged := MergeSemanticHits(hitsA, hitsZ)
+	compileNodes := NodesForSemanticCompile(state.Tree, activeNodes, merged)
+
+	return comp.CompileWithSemantic(sessionID, taskID, userMessage, compileNodes,
+		systemPrompt, m.semanticWeight, merged)
 }
 
 // EnqueueEvent sends an event to the session's async worker (non-blocking).
@@ -209,34 +313,71 @@ func (m *Manager) processEvent(_ context.Context, sessionID string, state *Sessi
 	event.Sequence = turn
 	node := state.Tree.AddNode(event)
 
-	// 3. Persist the new node durably to MongoDB
+	// 3. Embed the node payload (best-effort) and insert into the per-session
+	// HNSW index. Done synchronously within the single-writer worker to
+	// preserve ordering — embedding latency (50–150ms) is acceptable here
+	// because this path is async w.r.t. the gateway.
+	if m.semanticEnabled() && state.ActiveIndex != nil {
+		text := payloadForEmbedding(node, event)
+		if text != "" {
+			vec, err := m.embedder.Embed(ctx, text)
+			if err != nil {
+				log.Printf("session: embed failed for node %s: %v", node.NodeID, err)
+			} else {
+				node.Embedding = vec
+				node.EmbedModel = m.embedder.Model()
+				if insErr := state.ActiveIndex.Insert(node.NodeID, vec); insErr != nil {
+					log.Printf("session: HNSW insert failed for %s: %v", node.NodeID, insErr)
+				}
+				if event.EventType == domain.EventUserPrompt {
+					state.LastUserEmbedding = vec
+				}
+			}
+		}
+	}
+
+	// 4. Persist the (possibly embedding-bearing) node durably
 	if err := m.store.UpsertNode(ctx, node); err != nil {
 		log.Printf("session: failed to persist node %s: %v", node.NodeID, err)
 	}
 
-	// 4. Re-score active nodes
+	// 5. Re-score active nodes against the current semantic anchor
 	activeNodes := state.Tree.GetActiveNodes()
-	m.scorer.ScoreAll(activeNodes, turn)
+	m.scorer.ScoreAll(activeNodes, turn, state.LastUserEmbedding)
 
-	// 5. Update metrics
+	// 6. Update metrics
 	state.Metrics.TotalEvents++
 	if event.EventType == domain.EventUserPrompt {
 		state.Metrics.TotalTurns++
 	}
 
-	// 6. Check if GC should run
+	// 7. Check if GC should run
 	estimatedTokens := 0
 	for _, n := range activeNodes {
 		estimatedTokens += n.TokenCount
 	}
 	if shouldRun, reason := m.gc.ShouldRun(state.Tree, estimatedTokens); shouldRun {
+		// Capture pre-GC active set so we can diff against post-GC to
+		// figure out which IDs were swept/archived (and remove them from
+		// the HNSW index).
+		preIDs := make(map[string]bool, len(activeNodes))
+		for _, n := range activeNodes {
+			preIDs[n.NodeID] = true
+		}
+
 		gcStart := time.Now()
-		result := m.gc.Run(ctx, state.Tree, reason)
+		result := m.gc.Run(ctx, state.Tree, reason, state.LastUserEmbedding)
 		gcDuration := time.Since(gcStart)
 
 		state.Metrics.GCRuns++
 		state.Metrics.TotalTokensSaved += result.TokensFreed
 		state.Metrics.BranchesCompressed += result.BranchesCompressed
+
+		// Index hygiene: embeddings for nodes that dropped out of the active set move
+		// to the archive index before removal from the active HNSW graph.
+		if m.semanticEnabled() && state.ActiveIndex != nil && state.ArchiveIndex != nil {
+			reconcileSemanticIndices(state, state.Tree, preIDs)
+		}
 
 		// Persist swept node status changes to MongoDB
 		if result.NodesSwept > 0 || result.BranchesCompressed > 0 {
@@ -324,6 +465,48 @@ func (m *Manager) GetTreeStats(sessionID string) (total, active, compressed, arc
 	return
 }
 
+func reconcileSemanticIndices(state *SessionState, tree *statetree.Tree, preActiveIDs map[string]bool) {
+	if state == nil || state.ActiveIndex == nil || state.ArchiveIndex == nil {
+		return
+	}
+	postActive := tree.GetActiveNodes()
+	postIDs := make(map[string]bool, len(postActive))
+	for _, n := range postActive {
+		postIDs[n.NodeID] = true
+	}
+	for id := range preActiveIDs {
+		if postIDs[id] {
+			continue
+		}
+		if n, ok := tree.GetNode(id); ok && len(n.Embedding) > 0 {
+			_ = state.ArchiveIndex.Insert(id, n.Embedding)
+		}
+		state.ActiveIndex.Delete(id)
+	}
+}
+
 func estimateTokens(s string) int {
 	return len(s) / 4
+}
+
+// payloadForEmbedding picks the best text to send to the embedding API for a
+// given node + event. Prefers the cleaned-up node summary/title (low-noise),
+// falling back to the raw event payload when the tree hasn't extracted a
+// summary yet (early in a turn, or for tool/system events).
+func payloadForEmbedding(node *domain.StateNode, event *domain.Event) string {
+	if node != nil {
+		if node.Summary != "" && node.Title != "" {
+			return node.Title + ": " + node.Summary
+		}
+		if node.Summary != "" {
+			return node.Summary
+		}
+		if node.Title != "" {
+			return node.Title
+		}
+	}
+	if event != nil {
+		return event.Payload
+	}
+	return ""
 }

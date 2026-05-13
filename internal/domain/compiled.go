@@ -3,20 +3,24 @@ package domain
 import "time"
 
 type CompiledPrompt struct {
-	CompiledPromptID    string   `json:"compiled_prompt_id"`
-	SessionID           string   `json:"session_id"`
-	TaskID              string   `json:"task_id"`
-	CurrentUserMessage  string   `json:"current_user_message"`
-	ActiveGoal          string   `json:"active_goal"`
-	ActiveConstraints   []string `json:"active_constraints"`
-	RelevantDecisions   []string `json:"relevant_decisions"`
-	RelevantToolOutputs []string `json:"relevant_tool_outputs"`
-	CompressedContext   []string `json:"compressed_context"`
-	OpenIssues          []string `json:"open_issues"`
-	ExcludedNodeRefs    []string `json:"excluded_node_refs"`
-	FinalPrompt         string   `json:"final_prompt"`
-	OriginalTokenCount  int      `json:"original_token_count"`
-	CompiledTokenCount  int      `json:"compiled_token_count"`
+	CompiledPromptID   string `json:"compiled_prompt_id"`
+	SessionID          string `json:"session_id"`
+	TaskID             string `json:"task_id"`
+	CurrentUserMessage string `json:"current_user_message"`
+	// SystemPrompt is the caller-supplied system instruction. It is intentionally
+	// kept out of FinalPrompt so callers can send it as a dedicated `system`
+	// chat message exactly once (avoids double-counting in prompt_tokens).
+	SystemPrompt        string    `json:"system_prompt"`
+	ActiveGoal          string    `json:"active_goal"`
+	ActiveConstraints   []string  `json:"active_constraints"`
+	RelevantDecisions   []string  `json:"relevant_decisions"`
+	RelevantToolOutputs []string  `json:"relevant_tool_outputs"`
+	CompressedContext   []string  `json:"compressed_context"`
+	OpenIssues          []string  `json:"open_issues"`
+	ExcludedNodeRefs    []string  `json:"excluded_node_refs"`
+	FinalPrompt         string    `json:"final_prompt"`
+	OriginalTokenCount  int       `json:"original_token_count"`
+	CompiledTokenCount  int       `json:"compiled_token_count"`
 	CreatedAt           time.Time `json:"created_at"`
 }
 

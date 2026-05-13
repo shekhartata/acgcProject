@@ -108,7 +108,7 @@ func testConcurrentReadWrite(cfg EngineConfig) ConcurrencyResult {
 			tree.AddNode(event)
 
 			activeNodes := tree.GetActiveNodes()
-			sc.ScoreAll(activeNodes, turn)
+			sc.ScoreAll(activeNodes, turn, nil)
 			atomic.AddInt32(&totalOps, 1)
 
 			time.Sleep(time.Millisecond)
@@ -171,6 +171,7 @@ func testGCUnderContention(cfg EngineConfig) ConcurrencyResult {
 	aggressiveCfg.TokenBudget = 500
 	aggressiveCfg.MaxChildrenPerNode = 5
 	aggressiveCfg.LowRelevanceThreshold = 0.5
+	aggressiveCfg.DecisionSweepFloor = 0 // keep bare NodeDecision sweepable for this stress path
 
 	tree := statetree.NewTree(sessionID, taskID)
 	sc := scorer.NewScorer(aggressiveCfg.StaleAfterTurns, aggressiveCfg.MaxTokensPerNode)
@@ -180,6 +181,9 @@ func testGCUnderContention(cfg EngineConfig) ConcurrencyResult {
 		MaxTreeDepth:          aggressiveCfg.MaxTreeDepth,
 		MaxChildrenPerNode:    aggressiveCfg.MaxChildrenPerNode,
 		LowRelevanceThreshold: aggressiveCfg.LowRelevanceThreshold,
+		DecisionSweepFloor:    aggressiveCfg.DecisionSweepFloor,
+		MaxActiveNodes:        aggressiveCfg.MaxActiveNodes,
+		SweepHeadroomRatio:    aggressiveCfg.SweepHeadroomRatio,
 		StaleAfterTurns:       aggressiveCfg.StaleAfterTurns,
 	}
 	collector := gc.NewGarbageCollector(gcPolicy, sc, &gc.SimpleCompressor{})
@@ -212,7 +216,7 @@ func testGCUnderContention(cfg EngineConfig) ConcurrencyResult {
 			tree.AddNode(event)
 
 			activeNodes := tree.GetActiveNodes()
-			sc.ScoreAll(activeNodes, turn)
+			sc.ScoreAll(activeNodes, turn, nil)
 
 			activeTokens := 0
 			for _, n := range activeNodes {
@@ -220,7 +224,7 @@ func testGCUnderContention(cfg EngineConfig) ConcurrencyResult {
 			}
 
 			if shouldRun, reason := collector.ShouldRun(tree, activeTokens); shouldRun {
-				collector.Run(context.Background(), tree, reason)
+				collector.Run(context.Background(), tree, reason, nil)
 				atomic.AddInt32(&gcRuns, 1)
 			}
 
@@ -301,7 +305,7 @@ func testConcurrentCompile(cfg EngineConfig) ConcurrencyResult {
 	}
 
 	activeNodes := tree.GetActiveNodes()
-	sc.ScoreAll(activeNodes, tree.TurnCount())
+	sc.ScoreAll(activeNodes, tree.TurnCount(), nil)
 
 	totalOps := int32(0)
 	errCount := int32(0)

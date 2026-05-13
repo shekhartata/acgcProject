@@ -19,6 +19,8 @@ func main() {
 		exportJSON    = flag.String("export", "", "export results to JSON file")
 		skipConc      = flag.Bool("skip-concurrency", false, "skip concurrency tests")
 		verbose       = flag.Bool("v", false, "print per-turn stats for each session")
+		semantic      = flag.Bool("semantic", false, "exercise HNSW semantic scoring using a deterministic mock embedder (no API key needed)")
+		embedDim      = flag.Int("embed-dim", 128, "mock embedder dimension (only used with -semantic)")
 	)
 	flag.Parse()
 
@@ -72,6 +74,12 @@ func main() {
 
 	cfg := runner.DefaultConfig()
 	cfg.TokenBudget = *tokenBudget
+	if *semantic {
+		cfg.Embedder = runner.NewMockEmbedder(*embedDim)
+		cfg.EmbedDim = *embedDim
+		fmt.Printf("\n  Semantic scoring: ENABLED (mock embedder, dim=%d, w=%.2f, topK=%d)\n",
+			*embedDim, cfg.SemanticWeight, cfg.TopKAtCompile)
+	}
 
 	// Step 2: Replay each session
 	fmt.Println("\n  Running token savings analysis...")

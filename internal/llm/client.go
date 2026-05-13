@@ -53,7 +53,8 @@ type ChatMessage struct {
 
 type chatResponse struct {
 	Choices []struct {
-		Message ChatMessage `json:"message"`
+		Message      ChatMessage `json:"message"`
+		FinishReason string      `json:"finish_reason"`
 	} `json:"choices"`
 	Usage struct {
 		PromptTokens     int `json:"prompt_tokens"`
@@ -66,6 +67,10 @@ type GenerateResult struct {
 	Content          string
 	PromptTokens     int
 	CompletionTokens int
+	// FinishReason is the provider-reported termination reason, e.g. "stop",
+	// "length", "content_filter". Useful when Content is empty (a reasoning
+	// model that exhausted MaxTokens on hidden reasoning will report "length").
+	FinishReason string
 }
 
 // isReasoningModel returns true for models that don't support temperature/top_p
@@ -139,5 +144,6 @@ func (c *Client) Generate(ctx context.Context, messages []ChatMessage, temperatu
 		Content:          chatResp.Choices[0].Message.Content,
 		PromptTokens:     chatResp.Usage.PromptTokens,
 		CompletionTokens: chatResp.Usage.CompletionTokens,
+		FinishReason:     chatResp.Choices[0].FinishReason,
 	}, nil
 }

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/chandrashekhartata/acgc/internal/domain"
+	"github.com/chandrashekhartata/acgc/internal/facts"
 )
 
 // LLMCompressor uses a cheap LLM to compress branches into concise summaries.
@@ -30,11 +31,25 @@ func (c *LLMCompressor) Compress(ctx context.Context, nodes []*domain.StateNode)
 		return nil, fmt.Errorf("llm compress: %w", err)
 	}
 
-	var allDecisions, allIssues, allEventRefs []string
+	mergedFacts, mergedDecisions := facts.MergeFromNodes(nodes, 0, 0)
+	var allIssues, allEventRefs []string
 	for _, n := range nodes {
-		allDecisions = append(allDecisions, n.Decisions...)
 		allIssues = append(allIssues, n.OpenIssues...)
 		allEventRefs = append(allEventRefs, n.RawEventRefs...)
+	}
+
+	body, ents := facts.StripTrailingEntitiesLine(result.Content, 16)
+	body = strings.TrimSpace(body)
+	combinedFacts := facts.UnionFacts(mergedFacts, ents, 16)
+
+	summaryOut := strings.TrimSpace(facts.VerifiedFactsPrefix(combinedFacts) + body)
+	if summaryOut == "" {
+		summaryOut = strings.TrimSpace(result.Content)
+	}
+
+	tok := result.PromptTokens + result.CompletionTokens
+	if est := len(summaryOut) / 4; est > tok {
+		tok = est
 	}
 
 	return &domain.StateNode{
@@ -42,11 +57,12 @@ func (c *LLMCompressor) Compress(ctx context.Context, nodes []*domain.StateNode)
 		NodeType:     domain.NodeCompressedBranch,
 		Status:       domain.StatusCompressed,
 		Title:        fmt.Sprintf("Compressed %d nodes", len(nodes)),
-		Summary:      result.Content,
-		Decisions:    allDecisions,
+		Summary:      summaryOut,
+		Facts:        combinedFacts,
+		Decisions:    mergedDecisions,
 		OpenIssues:   allIssues,
 		RawEventRefs: allEventRefs,
-		TokenCount:   result.PromptTokens + result.CompletionTokens,
+		TokenCount:   tok,
 		CreatedAt:    time.Now(),
 		UpdatedAt:    time.Now(),
 	}, nil
@@ -61,7 +77,11 @@ Given a set of conversation nodes, produce a concise summary that preserves:
 - Important dependencies
 
 Remove: repetition, filler, dead-end explorations, temporary reasoning, duplicate information.
-Be factual and terse. Output only the compressed summary.`
+Be factual and terse.
+
+Output format (required):
+1) Several lines of compressed summary text (no preamble).
+2) On the FINAL line exactly: ENTITIES: <comma-separated proper nouns and short verbatim noun phrases>`
 
 func buildCompressionPrompt(nodes []*domain.StateNode) string {
 	var b strings.Builder
@@ -73,6 +93,9 @@ func buildCompressionPrompt(nodes []*domain.StateNode) string {
 		}
 		if n.Summary != "" {
 			b.WriteString(fmt.Sprintf("Content: %s\n", n.Summary))
+		}
+		if len(n.Facts) > 0 {
+			b.WriteString(fmt.Sprintf("Facts: %s\n", strings.Join(n.Facts, "; ")))
 		}
 		if len(n.Decisions) > 0 {
 			b.WriteString(fmt.Sprintf("Decisions: %s\n", strings.Join(n.Decisions, "; ")))

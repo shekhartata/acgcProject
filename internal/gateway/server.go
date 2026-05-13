@@ -16,8 +16,8 @@ import (
 
 type Server struct {
 	pb.UnimplementedACGCServiceServer
-	sessions    *session.Manager
-	defaultLLM  *llm.Client
+	sessions   *session.Manager
+	defaultLLM *llm.Client
 }
 
 func NewServer(sessions *session.Manager, defaultLLM *llm.Client) *Server {
@@ -70,16 +70,19 @@ func (s *Server) Run(ctx context.Context, req *pb.RunRequest) (*pb.RunResponse, 
 	// Select LLM client
 	llmClient := s.selectLLMClient(req.LlmConfig)
 
-	// Call main LLM with compiled prompt
-	messages := []llm.ChatMessage{
-		{Role: "user", Content: compiled.FinalPrompt},
+	// Wire format (Phase 2):
+	//   [system, user(FinalPrompt = context body), user(CurrentUserMessage)]
+	// FinalPrompt holds only the structured context; the user's question is
+	// sent as its own user message so framing matches naive chat history and
+	// no "## Current Request" wrapper is paid on the wire.
+	messages := make([]llm.ChatMessage, 0, 3)
+	if compiled.SystemPrompt != "" {
+		messages = append(messages, llm.ChatMessage{Role: "system", Content: compiled.SystemPrompt})
 	}
-	if systemPrompt != "" {
-		messages = []llm.ChatMessage{
-			{Role: "system", Content: systemPrompt},
-			{Role: "user", Content: compiled.FinalPrompt},
-		}
+	if compiled.FinalPrompt != "" {
+		messages = append(messages, llm.ChatMessage{Role: "user", Content: compiled.FinalPrompt})
 	}
+	messages = append(messages, llm.ChatMessage{Role: "user", Content: req.UserMessage})
 
 	temperature := float64(0.7)
 	maxTokens := 4096
@@ -127,7 +130,7 @@ func (s *Server) Run(ctx context.Context, req *pb.RunRequest) (*pb.RunResponse, 
 	_, activeNodes, compressedNodes, archivedNodes, _, _, _ := s.sessions.GetTreeStats(sessionID)
 
 	return &pb.RunResponse{
-		LlmResponse:     result.Content,
+		LlmResponse:      result.Content,
 		CompiledPromptId: compiled.CompiledPromptID,
 		Stats: &pb.PromptStats{
 			OriginalTokenCount: int32(compiled.OriginalTokenCount),

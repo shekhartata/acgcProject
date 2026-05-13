@@ -2,7 +2,7 @@ PROTO_DIR := proto
 API_DIR := api/proto
 BINARY := acgc
 
-.PHONY: proto build run test clean tidy lint mongo mongo-down mongo-logs stresstest eval eval-cached eval-judge
+.PHONY: proto build run test clean tidy lint mongo mongo-down mongo-logs stresstest eval eval-cached eval-judge eval-semantic eval-semantic-judge stresstest-semantic
 
 # --- Build ---
 
@@ -79,6 +79,20 @@ eval-cached:
 # Wipe cached responses (forces fresh API calls on next run).
 eval-clean:
 	rm -rf eval/cache eval/results
+
+# Live run with HNSW semantic scoring in the ACGC pipeline. Embedding calls
+# add a small cost (text-embedding-3-small is ~$0.02/1M tokens, negligible).
+eval-semantic:
+	go run ./eval -v -semantic
+
+# Same as above but with the LLM judge for open-ended probes.
+eval-semantic-judge:
+	go run ./eval -v -semantic -judge
+
+# Stress test with a deterministic mock embedder (no API key) — exercises the
+# semantic code paths under -race without spending any cents.
+stresstest-semantic:
+	go run -race ./stresstest/ -v -semantic
 
 # --- Full Stack ---
 

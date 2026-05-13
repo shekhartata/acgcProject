@@ -3,13 +3,17 @@ package runner
 import (
 	"context"
 	"fmt"
+	"log"
 	"time"
 
 	"github.com/chandrashekhartata/acgc/internal/compiler"
 	"github.com/chandrashekhartata/acgc/internal/domain"
+	"github.com/chandrashekhartata/acgc/internal/embedding"
 	"github.com/chandrashekhartata/acgc/internal/gc"
 	"github.com/chandrashekhartata/acgc/internal/scorer"
+	"github.com/chandrashekhartata/acgc/internal/session"
 	"github.com/chandrashekhartata/acgc/internal/statetree"
+	"github.com/chandrashekhartata/acgc/internal/vectorindex"
 	"github.com/chandrashekhartata/acgc/stresstest/fixtures"
 )
 
@@ -18,8 +22,24 @@ type EngineConfig struct {
 	MaxTreeDepth          int
 	MaxChildrenPerNode    int
 	LowRelevanceThreshold float64
-	StaleAfterTurns       int
-	MaxTokensPerNode      int
+	// DecisionSweepFloor: 0 disables soft floor for NodeDecision. Must sit
+	// strictly below LowRelevanceThreshold or bare decisions become un-sweepable.
+	DecisionSweepFloor float64
+	// MaxActiveNodes: count-based GC trigger. 0 disables.
+	MaxActiveNodes int
+	// SweepHeadroomRatio: soft trigger at ratio × TokenBudget. 0 disables.
+	SweepHeadroomRatio float64
+	StaleAfterTurns    int
+	MaxTokensPerNode   int
+
+	// Optional. When Embedder is nil, semantic ops are skipped.
+	Embedder             embedding.Provider
+	SemanticWeight       float64
+	TopKAtCompile        int
+	ArchiveTopKAtCompile int
+	EmbedDim             int
+	HNSWM                int
+	HNSWEFSearch         int
 }
 
 func DefaultConfig() EngineConfig {
@@ -28,8 +48,19 @@ func DefaultConfig() EngineConfig {
 		MaxTreeDepth:          10,
 		MaxChildrenPerNode:    50,
 		LowRelevanceThreshold: 0.30,
-		StaleAfterTurns:       15,
-		MaxTokensPerNode:      2000,
+		// Phase 2: 0.35 → 0.20; floor must sit below LowRelevanceThreshold.
+		DecisionSweepFloor: 0.20,
+		// Phase 2: dense-session triggers.
+		MaxActiveNodes:       25,
+		SweepHeadroomRatio:   0.60,
+		StaleAfterTurns:      15,
+		MaxTokensPerNode:     2000,
+		SemanticWeight:       0.20,
+		TopKAtCompile:        12,
+		ArchiveTopKAtCompile: 12,
+		EmbedDim:             128,
+		HNSWM:                16,
+		HNSWEFSearch:         50,
 	}
 }
 
@@ -47,15 +78,40 @@ func ReplaySession(name string, turns []fixtures.Turn, cfg EngineConfig) Session
 
 	tree := statetree.NewTree(sessionID, taskID)
 	sc := scorer.NewScorer(cfg.StaleAfterTurns, cfg.MaxTokensPerNode)
+	if cfg.SemanticWeight > 0 {
+		sc.SetSemanticWeight(cfg.SemanticWeight)
+	}
 	comp := compiler.NewCompiler(cfg.TokenBudget)
 	gcPolicy := gc.Policy{
 		MaxPromptTokens:       cfg.TokenBudget,
 		MaxTreeDepth:          cfg.MaxTreeDepth,
 		MaxChildrenPerNode:    cfg.MaxChildrenPerNode,
 		LowRelevanceThreshold: cfg.LowRelevanceThreshold,
+		DecisionSweepFloor:    cfg.DecisionSweepFloor,
+		MaxActiveNodes:        cfg.MaxActiveNodes,
+		SweepHeadroomRatio:    cfg.SweepHeadroomRatio,
 		StaleAfterTurns:       cfg.StaleAfterTurns,
 	}
 	collector := gc.NewGarbageCollector(gcPolicy, sc, &gc.SimpleCompressor{})
+
+	var (
+		activeIdx         vectorindex.Index
+		archIdx           vectorindex.Index
+		lastUserEmbedding []float32
+		semanticOn        = cfg.Embedder != nil
+	)
+	if semanticOn {
+		activeIdx = vectorindex.NewHNSW(vectorindex.Config{
+			Dim:      cfg.EmbedDim,
+			M:        cfg.HNSWM,
+			EFSearch: cfg.HNSWEFSearch,
+		})
+		archIdx = vectorindex.NewHNSW(vectorindex.Config{
+			Dim:      cfg.EmbedDim,
+			M:        cfg.HNSWM,
+			EFSearch: cfg.HNSWEFSearch,
+		})
+	}
 
 	result := SessionResult{Name: name}
 
@@ -84,10 +140,26 @@ func ReplaySession(name string, turns []fixtures.Turn, cfg EngineConfig) Session
 		// Simulate the session worker pipeline
 		turnNum := tree.IncrementTurn()
 		event.Sequence = turnNum
-		tree.AddNode(event)
+		node := tree.AddNode(event)
+
+		if semanticOn && node != nil {
+			vec, err := cfg.Embedder.Embed(context.Background(), turn.Content)
+			if err != nil {
+				log.Printf("stresstest: embed failed at turn %d: %v", turnNum, err)
+			} else {
+				node.Embedding = vec
+				node.EmbedModel = cfg.Embedder.Model()
+				if err := activeIdx.Insert(node.NodeID, vec); err != nil {
+					log.Printf("stresstest: HNSW insert failed: %v", err)
+				}
+				if turn.Role == "user" {
+					lastUserEmbedding = vec
+				}
+			}
+		}
 
 		activeNodes := tree.GetActiveNodes()
-		sc.ScoreAll(activeNodes, turnNum)
+		sc.ScoreAll(activeNodes, turnNum, lastUserEmbedding)
 
 		// Check and run GC
 		ts := TurnStat{
@@ -102,17 +174,69 @@ func ReplaySession(name string, turns []fixtures.Turn, cfg EngineConfig) Session
 		}
 
 		if shouldRun, reason := collector.ShouldRun(tree, estimatedActiveTokens); shouldRun {
-			gcResult := collector.Run(context.Background(), tree, reason)
+			preIDs := make(map[string]bool, len(activeNodes))
+			for _, n := range activeNodes {
+				preIDs[n.NodeID] = true
+			}
+			gcResult := collector.Run(context.Background(), tree, reason, lastUserEmbedding)
 			ts.GCTriggered = true
 			ts.GCTokensFreed = gcResult.TokensFreed
 			ts.GCNodesSwept = gcResult.NodesSwept
 			result.GCRuns++
 			result.TotalGCFreed += gcResult.TokensFreed
+
+			if semanticOn && activeIdx != nil && archIdx != nil {
+				postActive := tree.GetActiveNodes()
+				postIDs := make(map[string]bool, len(postActive))
+				for _, n := range postActive {
+					postIDs[n.NodeID] = true
+				}
+				for id := range preIDs {
+					if postIDs[id] {
+						continue
+					}
+					if n, ok := tree.GetNode(id); ok && len(n.Embedding) > 0 {
+						_ = archIdx.Insert(id, n.Embedding)
+					}
+					activeIdx.Delete(id)
+				}
+			}
 		}
 
 		// Compile prompt (the fast path)
 		activeNodes = tree.GetActiveNodes()
-		compiled := comp.Compile(sessionID, taskID, turn.Content, activeNodes, "")
+		var compiled *domain.CompiledPrompt
+		if semanticOn && turn.Role == "user" && turn.Content != "" {
+			qVec, err := cfg.Embedder.Embed(context.Background(), turn.Content)
+			if err != nil {
+				compiled = comp.Compile(sessionID, taskID, turn.Content, activeNodes, "")
+			} else {
+				topK := cfg.TopKAtCompile
+				if topK <= 0 {
+					topK = 12
+				}
+				kz := cfg.ArchiveTopKAtCompile
+				if kz <= 0 {
+					kz = 12
+				}
+				hitsA, qErr := activeIdx.Query(qVec, topK)
+				if qErr != nil {
+					compiled = comp.Compile(sessionID, taskID, turn.Content, activeNodes, "")
+				} else {
+					hitsZ, zErr := archIdx.Query(qVec, kz)
+					if zErr != nil {
+						compiled = comp.Compile(sessionID, taskID, turn.Content, activeNodes, "")
+					} else {
+						merged := session.MergeSemanticHits(hitsA, hitsZ)
+						nodes := session.NodesForSemanticCompile(tree, activeNodes, merged)
+						compiled = comp.CompileWithSemantic(sessionID, taskID, turn.Content,
+							nodes, "", cfg.SemanticWeight, merged)
+					}
+				}
+			}
+		} else {
+			compiled = comp.Compile(sessionID, taskID, turn.Content, activeNodes, "")
+		}
 
 		ts.CompiledTokens = compiled.CompiledTokenCount
 		ts.TokensSaved = ts.RawTokens - ts.CompiledTokens

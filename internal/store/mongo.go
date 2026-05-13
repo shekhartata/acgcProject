@@ -341,6 +341,73 @@ func (s *MongoStore) UpdateNodeStatus(ctx context.Context, sessionID, nodeID str
 	return err
 }
 
+// LoadNodeEmbeddings returns the embedding vector for every active node in
+// the session that has one persisted. Used to rebuild the in-memory HNSW
+// index when a session is rehydrated from a snapshot.
+//
+// Projected query — pulls only node_id + embedding to keep the payload small
+// for sessions with thousands of nodes.
+func (s *MongoStore) LoadNodeEmbeddings(ctx context.Context, sessionID string) (map[string][]float32, error) {
+	filter := bson.M{
+		"session_id": sessionID,
+		"embedding":  bson.M{"$exists": true, "$ne": nil},
+		"status":     bson.M{"$ne": string(domain.StatusArchived)},
+	}
+	opts := options.Find().SetProjection(bson.M{"node_id": 1, "embedding": 1})
+	cursor, err := s.nodes.Find(ctx, filter, opts)
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+
+	out := make(map[string][]float32)
+	for cursor.Next(ctx) {
+		var row struct {
+			NodeID    string    `bson:"node_id"`
+			Embedding []float32 `bson:"embedding"`
+		}
+		if err := cursor.Decode(&row); err != nil {
+			return nil, err
+		}
+		if row.NodeID == "" || len(row.Embedding) == 0 {
+			continue
+		}
+		out[row.NodeID] = row.Embedding
+	}
+	return out, nil
+}
+
+// LoadArchivedNodeEmbeddings returns embeddings for archived nodes only (dual HNSW archive index rebuild).
+func (s *MongoStore) LoadArchivedNodeEmbeddings(ctx context.Context, sessionID string) (map[string][]float32, error) {
+	filter := bson.M{
+		"session_id": sessionID,
+		"embedding":  bson.M{"$exists": true, "$ne": nil},
+		"status":     string(domain.StatusArchived),
+	}
+	opts := options.Find().SetProjection(bson.M{"node_id": 1, "embedding": 1})
+	cursor, err := s.nodes.Find(ctx, filter, opts)
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+
+	out := make(map[string][]float32)
+	for cursor.Next(ctx) {
+		var row struct {
+			NodeID    string    `bson:"node_id"`
+			Embedding []float32 `bson:"embedding"`
+		}
+		if err := cursor.Decode(&row); err != nil {
+			return nil, err
+		}
+		if row.NodeID == "" || len(row.Embedding) == 0 {
+			continue
+		}
+		out[row.NodeID] = row.Embedding
+	}
+	return out, nil
+}
+
 // ArchiveNodes marks multiple nodes as archived in one batch.
 func (s *MongoStore) ArchiveNodes(ctx context.Context, sessionID string, nodeIDs []string) error {
 	if len(nodeIDs) == 0 {
@@ -373,6 +440,7 @@ type CompressedBranch struct {
 	OriginalNodeIDs      []string  `bson:"original_node_ids"`
 	Summary              string    `bson:"summary"`
 	KeyDecisions         []string  `bson:"key_decisions"`
+	ExactFacts           []string  `bson:"exact_facts,omitempty"`
 	OpenIssues           []string  `bson:"open_issues"`
 	ImportantConstraints []string  `bson:"important_constraints"`
 	RawEventRefs         []string  `bson:"raw_event_refs"`
@@ -525,10 +593,10 @@ func (s *MongoStore) GetGCSummary(ctx context.Context, sessionID string) (totalR
 	pipeline := bson.A{
 		bson.M{"$match": bson.M{"session_id": sessionID}},
 		bson.M{"$group": bson.M{
-			"_id":          nil,
-			"total_runs":   bson.M{"$sum": 1},
-			"total_swept":  bson.M{"$sum": "$nodes_swept"},
-			"total_freed":  bson.M{"$sum": "$tokens_freed"},
+			"_id":         nil,
+			"total_runs":  bson.M{"$sum": 1},
+			"total_swept": bson.M{"$sum": "$nodes_swept"},
+			"total_freed": bson.M{"$sum": "$tokens_freed"},
 		}},
 	}
 

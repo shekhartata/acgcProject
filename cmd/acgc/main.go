@@ -11,12 +11,14 @@ import (
 
 	pb "github.com/chandrashekhartata/acgc/api/proto"
 	"github.com/chandrashekhartata/acgc/internal/config"
+	"github.com/chandrashekhartata/acgc/internal/embedding"
 	"github.com/chandrashekhartata/acgc/internal/gateway"
 	"github.com/chandrashekhartata/acgc/internal/gc"
 	"github.com/chandrashekhartata/acgc/internal/llm"
 	"github.com/chandrashekhartata/acgc/internal/scorer"
 	"github.com/chandrashekhartata/acgc/internal/session"
 	"github.com/chandrashekhartata/acgc/internal/store"
+	"github.com/chandrashekhartata/acgc/internal/vectorindex"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/reflection"
 )
@@ -47,6 +49,35 @@ func main() {
 
 	// Scorer
 	sc := scorer.NewScorer(cfg.StaleAfterTurns, 2000)
+	if cfg.SemanticEnabled {
+		sc.SetSemanticWeight(cfg.SemanticWeight)
+	}
+
+	// Embedding provider (semantic scoring). Constructed only when enabled
+	// — keeps v1 behavior identical when the flag is off.
+	var embedder embedding.Provider
+	if cfg.SemanticEnabled {
+		if cfg.EmbedAPIKey == "" {
+			log.Print("semantic: ACGC_SEMANTIC_ENABLED=true but no embed API key — falling back to heuristic-only")
+		} else {
+			switch cfg.EmbedProvider {
+			case "openai", "":
+				embedder = embedding.NewOpenAI(embedding.Config{
+					Provider: cfg.EmbedProvider,
+					BaseURL:  cfg.EmbedBaseURL,
+					APIKey:   cfg.EmbedAPIKey,
+					Model:    cfg.EmbedModel,
+					Dim:      cfg.EmbedDim,
+				})
+				log.Printf("semantic: enabled — embedder=%s/%s (dim=%d), weight=%.2f, topK=%d",
+					cfg.EmbedProvider, cfg.EmbedModel, cfg.EmbedDim, cfg.SemanticWeight, cfg.HNSWTopKAtCompile)
+			default:
+				log.Printf("semantic: unknown provider %q — falling back to heuristic-only", cfg.EmbedProvider)
+			}
+		}
+	} else {
+		log.Print("semantic: disabled (ACGC_SEMANTIC_ENABLED=false)")
+	}
 
 	// Compressor — use LLM compressor if API key is configured, else simple fallback
 	var compressor gc.Compressor
@@ -70,19 +101,31 @@ func main() {
 		MaxTreeDepth:          cfg.MaxTreeDepth,
 		MaxChildrenPerNode:    cfg.MaxChildrenPerNode,
 		LowRelevanceThreshold: cfg.LowRelevanceThreshold,
+		DecisionSweepFloor:    cfg.GCDecisionSweepFloor,
+		MaxActiveNodes:        cfg.GCMaxActiveNodes,
+		SweepHeadroomRatio:    cfg.GCSweepHeadroomRatio,
 		StaleAfterTurns:       cfg.StaleAfterTurns,
 	}
 	collector := gc.NewGarbageCollector(gcPolicy, sc, compressor)
 
 	// Session Manager
 	sessMgr := session.NewManager(session.ManagerConfig{
-		Store:          mongoStore,
-		Scorer:         sc,
-		GC:             collector,
-		TokenBudget:    cfg.DefaultTokenBudget,
-		ChannelBuffer:  cfg.SessionChannelBuffer,
-		IdleTimeoutS:   cfg.SessionIdleTimeoutS,
-		SnapshotEveryS: cfg.SnapshotIntervalS,
+		Store:                mongoStore,
+		Scorer:               sc,
+		GC:                   collector,
+		TokenBudget:          cfg.DefaultTokenBudget,
+		ChannelBuffer:        cfg.SessionChannelBuffer,
+		IdleTimeoutS:         cfg.SessionIdleTimeoutS,
+		SnapshotEveryS:       cfg.SnapshotIntervalS,
+		Embedder:             embedder,
+		SemanticWeight:       cfg.SemanticWeight,
+		TopKAtCompile:        cfg.HNSWTopKAtCompile,
+		ArchiveTopKAtCompile: cfg.ArchiveSemanticTopK,
+		HNSWConfig: vectorindex.Config{
+			Dim:      cfg.EmbedDim,
+			M:        cfg.HNSWM,
+			EFSearch: cfg.HNSWEFSearch,
+		},
 	})
 
 	// Default LLM client (the "master" LLM — used when request doesn't specify its own)

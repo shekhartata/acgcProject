@@ -13,6 +13,7 @@ type Weights struct {
 	TypePriority    float64
 	DependencyBoost float64
 	UnresolvedBoost float64
+	Semantic        float64
 	RedundancyPen   float64
 	ResolvedPen     float64
 	StalePen        float64
@@ -25,6 +26,7 @@ func DefaultWeights() Weights {
 		TypePriority:    0.20,
 		DependencyBoost: 0.15,
 		UnresolvedBoost: 0.15,
+		Semantic:        0.20,
 		RedundancyPen:   0.10,
 		ResolvedPen:     0.20,
 		StalePen:        0.15,
@@ -46,14 +48,23 @@ func NewScorer(staleAfterTurns, maxTokensPerNode int) *Scorer {
 	}
 }
 
+// SetSemanticWeight overrides the default semantic weight from config.
+// 0 effectively disables the semantic term without disabling the other signals.
+func (s *Scorer) SetSemanticWeight(w float64) {
+	s.weights.Semantic = w
+}
+
 // ScoreAll computes retention scores for every node in the set.
 // currentTurn is the latest turn number in the session.
-// allNodes is the full active set so we can compute dependency and redundancy signals.
-func (s *Scorer) ScoreAll(nodes []*domain.StateNode, currentTurn int64) {
+// queryVec is the anchor query embedding for the semantic signal — when nil
+// (or when a node has no embedding), the semantic component is treated as 0.
+// This keeps existing callers safe and lets the heuristic-only stresstest
+// keep working with no API key.
+func (s *Scorer) ScoreAll(nodes []*domain.StateNode, currentTurn int64, queryVec []float32) {
 	titleIndex := buildTitleIndex(nodes)
 
 	for _, node := range nodes {
-		node.Scores = s.scoreNode(node, currentTurn, nodes, titleIndex)
+		node.Scores = s.scoreNode(node, currentTurn, nodes, titleIndex, queryVec)
 	}
 }
 
@@ -62,6 +73,7 @@ func (s *Scorer) scoreNode(
 	currentTurn int64,
 	allNodes []*domain.StateNode,
 	titleIndex map[string]int,
+	queryVec []float32,
 ) domain.NodeScores {
 	scores := domain.NodeScores{}
 
@@ -101,12 +113,20 @@ func (s *Scorer) scoreNode(
 		scores.SizePenalty = math.Min(float64(node.TokenCount)/float64(s.maxTokensPerNode)-1.0, 1.0)
 	}
 
+	// 9. Semantic relevance to the anchor query. Graceful when either side
+	// is missing: dim mismatch or absent embeddings → signal stays at 0,
+	// the heuristic 8 still decide retention.
+	if queryVec != nil && len(node.Embedding) == len(queryVec) && len(queryVec) > 0 {
+		scores.Semantic = CosineSim(queryVec, node.Embedding)
+	}
+
 	// Final weighted score
 	scores.RetentionScore = clamp(
 		s.weights.Recency*scores.Recency+
 			s.weights.TypePriority*scores.TypePriority+
 			s.weights.DependencyBoost*scores.DependencyWeight+
-			s.weights.UnresolvedBoost*scores.UnresolvedBoost-
+			s.weights.UnresolvedBoost*scores.UnresolvedBoost+
+			s.weights.Semantic*scores.Semantic-
 			s.weights.RedundancyPen*scores.Redundancy-
 			s.weights.ResolvedPen*scores.ResolvedPenalty-
 			s.weights.StalePen*scores.StalePenalty-
@@ -115,6 +135,27 @@ func (s *Scorer) scoreNode(
 	)
 
 	return scores
+}
+
+// CosineSim computes cosine similarity between two equal-length vectors.
+// Returns a value in [-1, 1], but for normalized text embeddings it is
+// effectively [0, 1] in practice. Exposed for compiler re-blending.
+func CosineSim(a, b []float32) float64 {
+	if len(a) != len(b) || len(a) == 0 {
+		return 0
+	}
+	var dot, na, nb float64
+	for i := range a {
+		x := float64(a[i])
+		y := float64(b[i])
+		dot += x * y
+		na += x * x
+		nb += y * y
+	}
+	if na == 0 || nb == 0 {
+		return 0
+	}
+	return dot / (math.Sqrt(na) * math.Sqrt(nb))
 }
 
 func typePriority(nt domain.NodeType) float64 {

@@ -15,6 +15,8 @@ import (
 	"github.com/chandrashekhartata/acgc/eval/report"
 	"github.com/chandrashekhartata/acgc/eval/scoring"
 	"github.com/chandrashekhartata/acgc/internal/config"
+	"github.com/chandrashekhartata/acgc/internal/embedding"
+	"github.com/chandrashekhartata/acgc/internal/vectorindex"
 )
 
 func main() {
@@ -28,6 +30,7 @@ func main() {
 		judgeModel    = flag.String("judge-model", "", "model for the LLM judge (defaults to main model)")
 		tokenBudget   = flag.Int("acgc-budget", 6000, "ACGC token budget for the compiler")
 		verbose       = flag.Bool("v", false, "verbose per-probe logging")
+		semantic      = flag.Bool("semantic", false, "enable HNSW semantic scoring in the ACGC pipeline (requires embedder API key)")
 	)
 	flag.Parse()
 
@@ -50,6 +53,37 @@ func main() {
 
 	acgcCfg := harness.DefaultACGCConfig()
 	acgcCfg.TokenBudget = *tokenBudget
+
+	// Optionally enable the HNSW semantic layer in the ACGC pipeline.
+	// Defaults to ACGC_LLM_API_KEY for the embedder when no dedicated key.
+	if *semantic && !*cacheOnly {
+		embedKey := cfg.EmbedAPIKey
+		if embedKey == "" {
+			embedKey = cfg.DefaultLLMAPIKey
+		}
+		if embedKey == "" {
+			log.Fatal("semantic: -semantic set but no API key available for the embedder")
+		}
+		acgcCfg.Embedder = embedding.NewOpenAI(embedding.Config{
+			BaseURL: cfg.EmbedBaseURL,
+			APIKey:  embedKey,
+			Model:   cfg.EmbedModel,
+			Dim:     cfg.EmbedDim,
+		})
+		acgcCfg.SemanticWeight = cfg.SemanticWeight
+		if acgcCfg.SemanticWeight <= 0 {
+			acgcCfg.SemanticWeight = 0.20
+		}
+		acgcCfg.TopKAtCompile = cfg.HNSWTopKAtCompile
+		if acgcCfg.TopKAtCompile <= 0 {
+			acgcCfg.TopKAtCompile = 12
+		}
+		acgcCfg.HNSWConfig = vectorindex.Config{
+			Dim:      cfg.EmbedDim,
+			M:        cfg.HNSWM,
+			EFSearch: cfg.HNSWEFSearch,
+		}
+	}
 
 	cache, err := harness.NewCache(*cacheDir, llmCfg.Model)
 	if err != nil {
@@ -76,6 +110,12 @@ func main() {
 	fmt.Printf("\n  Model: %s\n", llmCfg.Model)
 	fmt.Printf("  Scenarios: %d\n", len(scenarios))
 	fmt.Printf("  Mode: %s\n", modeLabel(*cacheOnly, *useJudge))
+	if acgcCfg.Embedder != nil {
+		fmt.Printf("  Semantic: enabled (%s, dim=%d, w=%.2f, topK=%d)\n",
+			acgcCfg.Embedder.Model(), cfg.EmbedDim, acgcCfg.SemanticWeight, acgcCfg.TopKAtCompile)
+	} else {
+		fmt.Println("  Semantic: disabled (heuristic-only)")
+	}
 	if *budgetCap > 0 {
 		fmt.Printf("  Budget cap: %d tokens\n", *budgetCap)
 	}

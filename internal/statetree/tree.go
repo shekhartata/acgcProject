@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/chandrashekhartata/acgc/internal/domain"
+	"github.com/chandrashekhartata/acgc/internal/facts"
 )
 
 // Tree is the in-memory active state tree for a single session.
@@ -107,6 +108,8 @@ func (t *Tree) AddNode(event *domain.Event) *domain.StateNode {
 		CreatedAt:    time.Now(),
 		UpdatedAt:    time.Now(),
 	}
+
+	facts.ExtractFromEvent(node, event)
 
 	t.nodes[node.NodeID] = node
 	if parent, ok := t.nodes[parentID]; ok {

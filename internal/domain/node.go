@@ -35,6 +35,7 @@ type NodeScores struct {
 	ResolvedPenalty float64 `bson:"resolved_penalty" json:"resolved_penalty"`
 	StalePenalty    float64 `bson:"stale_penalty" json:"stale_penalty"`
 	SizePenalty     float64 `bson:"size_penalty" json:"size_penalty"`
+	Semantic        float64 `bson:"semantic" json:"semantic"`
 	RetentionScore  float64 `bson:"retention_score" json:"retention_score"`
 }
 
@@ -56,6 +57,8 @@ type StateNode struct {
 	TokenCount   int        `bson:"token_count" json:"token_count"`
 	TurnNumber   int64      `bson:"turn_number" json:"turn_number"`
 	Scores       NodeScores `bson:"scores" json:"scores"`
+	Embedding    []float32  `bson:"embedding,omitempty" json:"-"`
+	EmbedModel   string     `bson:"embed_model,omitempty" json:"-"`
 	CreatedAt    time.Time  `bson:"created_at" json:"created_at"`
 	UpdatedAt    time.Time  `bson:"updated_at" json:"updated_at"`
 }

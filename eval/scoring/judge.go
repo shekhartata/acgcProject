@@ -70,17 +70,13 @@ func (j *JudgeClient) JudgePair(
 
 	userMsg := buildJudgePrompt(probe, respA, respB)
 
-	result, err := j.client.Generate(ctx, []llm.ChatMessage{
-		{Role: "system", Content: judgeSystemPrompt},
-		{Role: "user", Content: userMsg},
-	}, 0, 600)
+	// Empty / non-JSON outputs from reasoning models are common when the small
+	// MaxTokens budget is consumed by hidden reasoning. Try once, then retry
+	// with a larger budget on parse failure before giving up.
+	scoreA, reasonA, scoreB, reasonB, lastFinish, lastLen, lastRaw, err := j.judgeWithRetry(ctx, userMsg)
 	if err != nil {
-		return Score{}, Score{}, fmt.Errorf("judge call: %w", err)
-	}
-
-	scoreA, reasonA, scoreB, reasonB, err := parseJudgeResponse(result.Content)
-	if err != nil {
-		return Score{}, Score{}, fmt.Errorf("parse judge: %w (raw: %s)", err, truncateMid(result.Content, 200))
+		return Score{}, Score{}, fmt.Errorf("parse judge: %w (finish=%q, content_len=%d, raw: %s)",
+			err, lastFinish, lastLen, truncateMid(lastRaw, 200))
 	}
 
 	// Un-randomize back to baseline/acgc.
@@ -108,6 +104,64 @@ func (j *JudgeClient) JudgePair(
 		Detail:     acgcReason,
 	}
 	return bs, as, nil
+}
+
+// judgeMaxTokensFirst is the budget for the first judge call. Reasoning
+// models (gpt-5, o1, o3) burn part of MaxTokens on hidden reasoning before
+// the visible JSON body, so this needs to be roomy.
+const (
+	judgeMaxTokensFirst = 1500
+	judgeMaxTokensRetry = 3000
+)
+
+// callJudge issues one judge generation. Surfaces FinishReason for diagnostics.
+func (j *JudgeClient) callJudge(ctx context.Context, userMsg string) (*llm.GenerateResult, error) {
+	return j.client.Generate(ctx, []llm.ChatMessage{
+		{Role: "system", Content: judgeSystemPrompt},
+		{Role: "user", Content: userMsg},
+	}, 0, judgeMaxTokensFirst)
+}
+
+// callJudgeRetry issues a retry with a larger token budget — protects against
+// "length"-finish failures on reasoning models that ate the first budget.
+func (j *JudgeClient) callJudgeRetry(ctx context.Context, userMsg string) (*llm.GenerateResult, error) {
+	return j.client.Generate(ctx, []llm.ChatMessage{
+		{Role: "system", Content: judgeSystemPrompt},
+		{Role: "user", Content: userMsg},
+	}, 0, judgeMaxTokensRetry)
+}
+
+// judgeWithRetry runs callJudge and parses; on call-failure or parse-failure
+// it retries once with a larger budget, then returns the last failure context
+// (finish_reason, content length, raw content) for clearer error messages.
+func (j *JudgeClient) judgeWithRetry(ctx context.Context, userMsg string) (
+	scoreA float64, reasonA string, scoreB float64, reasonB string,
+	finishReason string, contentLen int, rawContent string, err error,
+) {
+	result, callErr := j.callJudge(ctx, userMsg)
+	if callErr == nil {
+		finishReason, rawContent = result.FinishReason, result.Content
+		contentLen = len(result.Content)
+		scoreA, reasonA, scoreB, reasonB, err = parseJudgeResponse(result.Content)
+		if err == nil {
+			return
+		}
+	} else {
+		err = callErr
+	}
+
+	retry, retryErr := j.callJudgeRetry(ctx, userMsg)
+	if retryErr != nil {
+		// Surface whichever error gives more signal — prefer the call error.
+		if err == nil {
+			err = retryErr
+		}
+		return
+	}
+	finishReason, rawContent = retry.FinishReason, retry.Content
+	contentLen = len(retry.Content)
+	scoreA, reasonA, scoreB, reasonB, err = parseJudgeResponse(retry.Content)
+	return
 }
 
 func buildJudgePrompt(probe datasets.Probe, respA, respB string) string {
