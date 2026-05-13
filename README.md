@@ -1,6 +1,6 @@
 # ACGC — Agent Context Garbage Collector
 
-A Go sidecar runtime that sits between an AI agent and its LLM, intercepting every interaction to build a structured context model. It scores relevance, prunes stale information, compresses resolved branches, and compiles only the most useful context into each LLM call — reducing token costs, lowering latency, and improving response quality.
+A Go sidecar runtime that sits between an AI agent and its LLM, intercepting every interaction to build a structured context model. It scores relevance (**heuristic + optional semantic / embeddings**), prunes stale information, compresses resolved branches, and compiles only the most useful context into each LLM call — optionally **pulling archived nodes back into the prompt** via dual **HNSW** indexes — reducing token costs, lowering latency, and improving recall on long-range and topic-switching sessions.
 
 ---
 
@@ -11,6 +11,8 @@ A Go sidecar runtime that sits between an AI agent and its LLM, intercepting eve
   - [End-to-End Flow](#end-to-end-flow)
   - [State Tree](#state-tree)
   - [Relevance Scoring](#relevance-scoring)
+  - [Semantic embeddings and HNSW (optional)](#semantic-embeddings-and-hnsw-optional)
+  - [Facts and verbatim decisions](#facts-and-verbatim-decisions)
   - [Garbage Collection](#garbage-collection)
   - [Prompt Compilation](#prompt-compilation)
   - [Context Rehydration](#context-rehydration)
@@ -90,11 +92,8 @@ User sends message
 │ 8. COMPILE: select highest-scored
 │    nodes within token budget
 │
-│ 9. ASSEMBLE prompt:
-│    system → user request → goals →
-│    constraints → decisions →
-│    compressed context → tool outputs →
-│    open issues
+│ 9. ASSEMBLE messages for LLM:
+│    system (once) → user(compiled context) → user(current query)
 │
 │ 10. FORWARD to LLM
 │
@@ -103,6 +102,8 @@ User sends message
 │      savings %, GC info)
 └─────────┘
 ```
+
+**Optional semantic path (`ACGC_SEMANTIC_ENABLED=true`):** after each node is created, the worker can **compute an embedding** (OpenAI-compatible; default `text-embedding-3-small`) and insert it into a per-session **Active** HNSW graph. The **last user message** embedding anchors **cosine similarity** inside the retention scorer. On **GC sweep**, vectors for nodes that leave the active set move to a second **Archive** HNSW so they stay retrievable. On **compile**, the imminent user message is embedded again; top‑K hits from **Active ∪ Archive** are merged, **archived hits** are included in the compilation node set, and the compiler **re-blends** scores with a configurable **semantic weight** (see [Semantic embeddings and HNSW (optional)](#semantic-embeddings-and-hnsw-optional)).
 
 ### State Tree
 
@@ -120,76 +121,105 @@ Every interaction is classified into a typed node and inserted into a tree struc
 | `compressed_branch` | Multiple old nodes compressed into one | Medium |
 | `background` | Miscellaneous context | Lowest |
 
-Nodes track: parent-child relationships, raw event references (for rehydration), token counts, creation/update times, and dependency links to other nodes.
+Nodes track: parent-child relationships, raw event references (for rehydration), token counts, creation/update times, dependency links to other nodes, optional **`Facts` / `Decisions`** string slices (see [Facts & Verbatim Decisions](#facts--verbatim-decisions)), and optional **`Embedding`** (+ model id) when semantic mode is on.
 
 **Node lifecycle:** `active` → `stale` → `archived` (or `active` → `compressed` when a branch is compacted).
 
 ### Relevance Scoring
 
-Every active node receives a **retention score** (0.0 to 1.0) computed from 8 weighted signals:
+Every active node receives a **retention score** (0.0 to 1.0) from a **weighted sum of signals** (see `internal/scorer`). Default weights match the table below.
 
-| Signal | Weight | What It Measures |
+| Signal | Default weight | What it measures |
 |---|---|---|
-| Recency | 0.25 | Exponential decay based on turns since creation. Recent = high. |
-| Type Priority | 0.20 | Inherent importance of the node type (goals=1.0, background=0.2) |
-| Dependency Weight | 0.15 | How many other active nodes depend on this one |
-| Unresolved Boost | 0.15 | +1.0 if the node has open issues |
-| Redundancy Penalty | -0.10 | Penalizes duplicate/similar nodes |
-| Resolved Penalty | -0.20 | Penalizes nodes marked as resolved |
-| Stale Penalty | -0.15 | Grows as node age exceeds `ACGC_STALE_TURNS` |
-| Size Penalty | -0.05 | Penalizes excessively large nodes |
+| Recency | 0.25 | Exponential decay by turn distance; recent nodes score higher. |
+| Type priority | 0.20 | Intrinsic importance by node type (goals highest, background lowest). |
+| Dependency weight | 0.15 | Boost if other active nodes depend on this node. |
+| Unresolved boost | 0.15 | Boost while the node carries open issues. |
+| Semantic | **0.20** when enabled | Cosine similarity between the node's **embedding** and the anchor query vector (typically the **latest user message** embedding). Zero if semantic mode is off or vectors are missing. |
+| Redundancy penalty | −0.10 | Duplicate titles / redundant nodes. |
+| Resolved penalty | −0.20 | Resolved nodes penalized toward sweep. |
+| Stale penalty | −0.15 | Grows when age exceeds `ACGC_STALE_TURNS`. |
+| Size penalty | −0.05 | Oversized payloads vs `MaxTokensPerNode`. |
 
-**Formula:**
+**Combined shape (conceptual):**
+
 ```
 RetentionScore = clamp(
-    0.25×Recency + 0.20×TypePriority + 0.15×DependencyWeight + 0.15×UnresolvedBoost
-  - 0.10×Redundancy - 0.20×ResolvedPenalty - 0.15×StalePenalty - 0.05×SizePenalty,
-  0.0, 1.0
-)
+    w_recency×Recency + w_type×TypePriority + w_dep×Dependency + w_open×Unresolved
+  + w_sem×Semantic
+  − w_red×Redundancy − w_res×Resolved − w_stale×Stale − w_size×SizePenalty,
+  0.0, 1.0)
 ```
 
-This is purely heuristic — no LLM calls, no embeddings. Fast enough to run on every turn (<1ms for 100 nodes).
+With **`ACGC_SEMANTIC_ENABLED=false`**, no embedder is constructed, **`Semantic` stays 0**, and scoring is heuristic-only (fast, predictable, no embedding cost). With semantic mode **on**, the worker embeds node payloads **best-effort** and uses the cached **last user** embedding as the scorer anchor so freshness of the user intent shapes retention before compile-time retrieval runs again.
+
+---
+
+### Semantic embeddings and HNSW (optional)
+
+When **`ACGC_SEMANTIC_ENABLED=true`** and embed credentials are available:
+
+1. **Per-node embeddings** — After a node is written, the session worker derives text from title/summary/payload (`internal/session`), calls the embedder (**OpenAI-compatible** REST; defaults in `internal/config`), and stores **`Embedding`** on the node plus MongoDB (`internal/store`).
+2. **Dual in-memory graphs** — Each session maintains two **`coder/hnsw`** graphs wrapped by `internal/vectorindex`: **`ActiveIndex`** (live active-set vectors) and **`ArchiveIndex`** (vectors for nodes that were **swept** off the active list). On GC, embeddings for removed active IDs are **inserted into Archive** and **deleted from Active** so archived content stays searchable (`reconcileSemanticIndices` / eval & stress mirrors).
+3. **Compile-time retrieval** — `CompilePrompt` embeds the **current user message**, queries Active **top‑K** and Archive **top‑K** separately, **`MergeSemanticHits`** keeps the best score per node id, then **`NodesForSemanticCompile`** unions **active nodes** plus **matching archived** nodes. **`CompileWithSemantic`** adjusts the effective sort/budget ranking using **`semantic_weight × (hitScore − node's prior semantic contribution)`** so the imminent query boosts relevant ghosts without rewriting stored scores wholesale.
+4. **Cold start** — Rehydrating a session rebuilds both graphs from Mongo via **`LoadNodeEmbeddings`** (active) and **`LoadArchivedNodeEmbeddings`** (archived-only).
+
+**Defaults (env):** `ACGC_SEMANTIC_WEIGHT=0.20`, `ACGC_HNSW_TOP_K_AT_COMPILE=12`, `ACGC_ARCHIVE_SEMANTIC_TOP_K=12`, `ACGC_HNSW_M=16`, `ACGC_HNSW_EF_SEARCH=50`, `ACGC_EMBED_MODEL=text-embedding-3-small`, `ACGC_EMBED_DIM=1536`. See [Environment Variables](#environment-variables).
+
+The **stress** harness can exercise this path **without billing** embeddings using **`-semantic`** + a deterministic **`MockEmbedder`** (`make stresstest-semantic`).
+
+---
+
+### Facts and verbatim decisions
+
+**`internal/facts`** performs **deterministic** extraction from user prompts and assistant replies (patterns + small lexicon): important tokens and short **decisions** land in **`node.Facts`** / **`node.Decisions`**. Compression paths merge children so **verbatim snippets** survive into **`compressed_branch`** summaries (LLM branch also asks for trailing **`ENTITIES:`** merged back into **`Facts`**).
+
+**GC hybrid policy:** Nodes with **any** Facts or Decisions are **never swept solely for low relevance** (hard defer). Bare **`NodeDecision`** nodes use **`DecisionSweepFloor`**: sweep compares **`max(raw_score, floor)`** against **`LowRelevanceThreshold`** — the floor **must stay below** the relevance threshold so filler assistant turns remain reclaimable (`internal/gc`).
+
+**Prompt rendering:** **`internal/compiler`** adds indented **`facts:`** / **`decisions:`** lines **only for** `compressed_branch` / `summary` nodes, where summaries might omit raw wording; ordinary active nodes expose content in their bullet **`Summary`** so we avoid duplicate token overhead.
+
+---
 
 ### Garbage Collection
 
-GC uses a **mark-sweep-compact** cycle, triggered automatically when any threshold is exceeded:
+GC uses a **mark-sweep-compact** cycle whenever **any** automatic trigger fires (or `TriggerGC` supplies **manual**). **Estimated active-node token sum** feeds the pressure / headroom checks.
 
-| Trigger | Default Threshold | What It Means |
+| Trigger | Default | What it means |
 |---|---|---|
-| Token pressure | `6000` tokens | Total active node tokens exceed the budget |
-| Tree depth | `10` levels | Tree is too deep (long dependency chains) |
-| Tree width | `50` children | A single node has too many children |
-| Low relevance | `0.30` avg score | Average retention score dropped too low |
-| Resolved branch | Any resolved nodes | Nodes marked resolved can be cleaned up |
-| Manual | N/A | Triggered via `TriggerGC` gRPC call |
+| **Token pressure** | `ACGC_TOKEN_BUDGET` (~6000) | Sum of active node **`TokenCount`** exceeds the compiled prompt budget. |
+| **Soft headroom** | `ACGC_GC_SWEEP_HEADROOM_RATIO` (**0.60**) × budget | Estimated active tokens **>** 3600 — early GC so dense short-turn sessions compact before saturation. (**0** disables.) |
+| **Too many active nodes** | **`ACGC_GC_MAX_ACTIVE_NODES` (25)** | Active node cardinality exceeded — complements token triggers on many small utterances. (**0** disables.) |
+| **Tree depth** | `10` | Max lineage depth exceeds limit. |
+| **Tree width** | `50` | A parent has too many children. |
+| **Low average relevance** | `0.30` | Mean retention score across actives below threshold. |
+| **Resolved branch** | (any) | At least one resolved node — opportunistic cleanup. |
+| **Manual** | — | `TriggerGC` RPC. |
 
 **GC phases:**
 
-1. **Mark**: Re-score all active nodes. Identify nodes with retention score below the threshold.
-2. **Sweep**: Move low-scoring nodes to `archived` status. They're removed from the active prompt but their raw events remain in MongoDB.
-3. **Compact**: If a parent has too many children or all children are resolved, compress the branch — multiple nodes are replaced by a single `compressed_branch` summary node.
+1. **Mark / score** — Re-score all active nodes (including **semantic** term when enabled). Candidates for sweep have effective score **below** `LowRelevanceThreshold` after policy tweaks.
+2. **Sweep** — Low-scoring nodes become **`archived`**; raw events stay in MongoDB. **Never swept** on relevance alone if **`len(Facts) > 0` or `len(Decisions) > 0`**. Bare **`NodeDecision`** uses **`DecisionSweepFloor`**: sweep score = **`max(raw, floor)`** — the floor must remain **below** **`LowRelevanceThreshold`** so generic assistant chatter stays reclaimable (default floor **0.20** vs threshold **0.30**).
+3. **Compact** — Wide or resolved branches compress into **`compressed_branch`** nodes via **SimpleCompressor** or **LLMCompressor** (`internal/gc`, `internal/llm`).
 
-**What GC preserves:** Goals, active constraints, nodes with open issues, nodes that other active nodes depend on. These get natural protection through higher type priority and boost signals.
+After sweep, **`internal/session`** reconciles semantic indexes: embeddings for archived IDs migrate **Active → Archive** HNSW.
 
-**What GC removes:** Old tool outputs, resolved attempts, stale background context, redundant information.
+**Natural protection:** Goals, constraints, factual/decision-bearing nodes (hard deferral), dependents, unresolved issues remain in the competition set unless policy explicitly archives them via other pathways.
+
+---
 
 ### Prompt Compilation
 
-The compiler assembles the final prompt within a strict token budget. It follows a priority order:
+The compiler (`internal/compiler`) builds **`FinalPrompt`**: Markdown sections (**`## Active Goals`**, **`## Constraints`**, **`## Key Decisions`**, **`## Prior Context`**, …) joined by `\n\n---\n\n`, **within `ACGC_TOKEN_BUDGET`**.
 
-1. **System prompt** (always included)
-2. **Current user message** (always included)
-3. **Active goals** (always included — not budget-limited)
-4. **Active constraints** (always included — not budget-limited)
-5. **Key decisions** (budget-limited, sorted by retention score)
-6. **Compressed context** (budget-limited)
-7. **Tool outputs** (budget-limited)
-8. **Open issues** (budget-limited)
-9. **Additional context** (fills remaining budget)
+**Reservation & priority:** Estimated tokens reserve **system** + **imminent user message** first so the structured body fits what the API will actually send. **All buckets**, including goals and constraints, participate in **`selectWithinBudget`** in priority order (goals → constraints → decisions → compressed → tool outputs → issues → remainder) so nothing bypasses the cap.
 
-Nodes within each bucket are sorted by retention score. The compiler greedily fills the budget from highest to lowest priority. Excluded nodes are tracked in the response (their IDs are returned for transparency).
+**Semantic compile:** When `CompileWithSemantic` runs, archived nodes surfaced by **HNSW** are part of that same priority pass.
 
-**Token estimation:** Uses a `len(string) / 4` heuristic (~4 chars per token). This is fast but approximate — suitable for budget management without requiring a tokenizer dependency.
+**Wire format (`internal/gateway`, `eval/harness`):** chat messages are **`[system, user(context = FinalPrompt), user(current message)]`** — the system string is **not** duplicated inside `FinalPrompt`; `CompiledTokenCount` accounts for **system + FinalPrompt + current user text** for apples-to-apples stats.
+
+**Token estimation:** `len(string) / 4` (~4 chars per token) for budgeting and stats.
+
+---
 
 ### Context Rehydration
 
@@ -206,7 +236,7 @@ This means archiving is non-destructive. No data is ever deleted; it's just move
 ACGC separates reads (fast, synchronous) from writes (asynchronous, background):
 
 - **Fast Path** (<50ms overhead): The gRPC `Run` call reads the in-memory state tree under a read lock, compiles the prompt, and forwards to the LLM. No database queries on the hot path.
-- **Async Path**: Events are enqueued to a per-session buffered Go channel. A dedicated worker goroutine processes them: persists to MongoDB, updates the tree, scores, and triggers GC. This never blocks the gateway.
+- **Async Path**: Events are enqueued to a per-session buffered Go channel. A dedicated worker goroutine persists to MongoDB, updates the tree, scores, optionally **embeds** and maintains **dual HNSW** indexes when semantic mode is on, and triggers GC. This never blocks the gateway.
 
 ### Concurrency Model
 
@@ -230,7 +260,7 @@ Gateway (gRPC handlers) ────── reads from Tree A/B ─────�
 | Collection | Purpose | Retention |
 |---|---|---|
 | `events` | Raw event archive (append-only) | TTL-based (configurable) |
-| `state_nodes` | Durable node records | Per-session lifecycle |
+| `state_nodes` | Durable node records (including optional **embedding** vectors + model id for semantic mode) | Per-session lifecycle |
 | `compressed_branches` | Compressed branch summaries with original refs | Per-session lifecycle |
 | `snapshots` | Periodic full state tree snapshots for crash recovery | Rolling window |
 | `gc_logs` | GC audit trail (trigger reason, nodes swept, tokens freed) | Indefinite |
@@ -254,6 +284,7 @@ MongoDB is only used for durability and analytics. The active state tree lives e
 # Copy and configure environment
 cp .env.example .env
 # Edit .env: set ACGC_MONGO_URI, optionally ACGC_LLM_API_KEY
+# For semantic mode on the server: ACGC_SEMANTIC_ENABLED=true plus embed access (defaults embed key to LLM key)
 
 # Build all binaries
 make build
@@ -288,12 +319,26 @@ make eval-clean && make eval-semantic-judge
 | `ACGC_TOKEN_BUDGET` | `6000` | Default token budget per compiled prompt |
 | `ACGC_MAX_TREE_DEPTH` | `10` | GC trigger: max tree depth |
 | `ACGC_MAX_CHILDREN` | `50` | GC trigger: max children per node |
-| `ACGC_LOW_RELEVANCE` | `0.30` | GC trigger: minimum average retention score |
+| `ACGC_LOW_RELEVANCE` | `0.30` | GC trigger: sweep when average retention across actives falls below this |
+| `ACGC_GC_DECISION_SWEEP_FLOOR` | `0.20` | Soft floor for bare `NodeDecision` sweep score; **must stay below** `ACGC_LOW_RELEVANCE` |
+| `ACGC_GC_MAX_ACTIVE_NODES` | `25` | GC trigger: active node count cap (`0` = off) |
+| `ACGC_GC_SWEEP_HEADROOM_RATIO` | `0.60` | GC trigger when estimated active tokens exceed ratio × budget (`0` = off) |
 | `ACGC_STALE_TURNS` | `15` | Turns before staleness penalty kicks in |
 | `ACGC_GC_INTERVAL` | `5` | Check GC every N turns |
 | `ACGC_SESSION_BUFFER` | `100` | Per-session event channel buffer size |
 | `ACGC_SESSION_IDLE_TIMEOUT` | `1800` | Seconds before idle session is cleaned up |
 | `ACGC_SNAPSHOT_INTERVAL` | `60` | Seconds between state tree snapshots |
+| `ACGC_SEMANTIC_ENABLED` | `false` | When `true`, construct embedder + dual HNSW per session |
+| `ACGC_SEMANTIC_WEIGHT` | `0.20` | Weight on **semantic** signal in scorer; also used for compile-time re-blending |
+| `ACGC_HNSW_TOP_K_AT_COMPILE` | `12` | Top-K retrieval from Active index at compile |
+| `ACGC_ARCHIVE_SEMANTIC_TOP_K` | `12` | Top-K retrieval from Archive index at compile |
+| `ACGC_HNSW_M` | `16` | HNSW graph degree (M) |
+| `ACGC_HNSW_EF_SEARCH` | `50` | HNSW ef search width |
+| `ACGC_EMBED_PROVIDER` | `openai` | Embedding provider id |
+| `ACGC_EMBED_BASE_URL` | `https://api.openai.com/v1` | Embedding API base URL |
+| `ACGC_EMBED_API_KEY` | (falls back to `ACGC_LLM_API_KEY`) | Key for embedding calls |
+| `ACGC_EMBED_MODEL` | `text-embedding-3-small` | Embedding model name |
+| `ACGC_EMBED_DIM` | `1536` | Vector dimension (must match model) |
 
 ---
 
@@ -387,11 +432,14 @@ The stress test suite (`stresstest/`) validates ACGC's correctness and performan
 # Run with race detector + verbose output (slower than a plain `go run`)
 make stresstest
 
-# Export results to JSON (same as README recorded numbers)
+# Same pipeline with mock embeddings + dual HNSW (no API spend)
+make stresstest-semantic
+
+# Export results to JSON (same as README recorded heuristic numbers)
 make stresstest-export
 
 # Custom options
-./bin/stresstest -budget 6000 -v -export stresstest/results.json -skip-concurrency
+./bin/stresstest -budget 6000 -v -semantic -export stresstest/results.json -skip-concurrency
 ```
 
 ### What It Tests
@@ -502,11 +550,14 @@ acgcProject/
 │   ├── domain/            # Core types: Event, StateNode, CompiledPrompt, SessionMetrics
 │   ├── store/             # MongoDB persistence (6 collections, 25+ methods)
 │   ├── statetree/         # In-memory state tree with RWMutex, node classification
-│   ├── scorer/            # 8-signal heuristic retention scorer
+│   ├── scorer/            # Heuristic + semantic (cosine) retention scoring
 │   ├── gc/                # Mark-sweep-compact GC + SimpleCompressor + LLMCompressor
-│   ├── compiler/          # Token-budget-aware prompt compiler (priority-ordered assembly)
+│   ├── compiler/          # Budget-aware Markdown assembly (`FinalPrompt`; system separate)
+│   ├── facts/             # Deterministic Facts/Decisions extraction + merge helpers
+│   ├── embedding/         # OpenAI-compatible embed provider interface
+│   ├── vectorindex/       # In-memory HNSW wrapper (dual Active/Archive per session)
 │   ├── llm/               # OpenAI-compatible HTTP client (GPT-5/o3 reasoning model support)
-│   ├── session/           # Per-session goroutine manager (single-writer, channel-based)
+│   ├── session/           # Session worker + CompilePrompt semantic merge helpers
 │   └── gateway/           # gRPC server implementation
 ├── stresstest/
 │   ├── fixtures/          # Synthetic conversation generator (5 scenarios, 175 turns)
@@ -535,13 +586,15 @@ acgcProject/
 |---|---|---|
 | gRPC interface | Done | 5 RPCs, language-agnostic, proto definitions |
 | Go SDK | Done | `pkg/acgc` with `ContextRuntime` |
-| State tree | Done | In-memory, node classification, parent-child relationships |
-| Heuristic scorer | Done | 8 weighted signals, <1ms per 100 nodes |
-| Garbage collector | Done | Mark-sweep-compact, 6 trigger types, policy-configurable |
+| State tree | Done | In-memory, typed nodes, Facts/Decisions, optional embeddings |
+| Heuristic + semantic scorer | Done | Eight signals plus **0.20× cosine similarity** when semantic mode is on; heuristic-only stays sub-millisecond for ~100 nodes (embedding HTTP calls add their own latency) |
+| Dual HNSW (active + archive) | Done | Per-session graphs, GC reconciliation, Mongo rehydration |
+| Facts pipeline | Done | `internal/facts` extraction, GC deferral, compressor + compiler hooks |
+| Garbage collector | Done | Mark-sweep-compact + **soft headroom** + **max active nodes** + hybrid factual protection |
 | Simple compressor | Done | String-based branch compression (no LLM needed) |
-| LLM compressor | Done | OpenAI-compatible, used when summarizer API key is configured |
-| Prompt compiler | Done | Priority-ordered, budget-constrained assembly |
-| MongoDB persistence | Done | 6 collections, bulk ops, snapshots, rehydration |
+| LLM compressor | Done | OpenAI-compatible summaries + **`ENTITIES:`** → verbatim facts |
+| Prompt compiler | Done | Budgeted Markdown sections + **dual user messages** (`FinalPrompt` + current turn) |
+| MongoDB persistence | Done | 6 collections; node embeddings + archived embedding queries |
 | Concurrency model | Done | Per-session goroutines, channels, RWMutex |
 | Context rehydration | Done | Pull raw events from archive for compressed branches |
 | Interactive test client | Done | REPL with real LLM integration |
@@ -553,7 +606,7 @@ acgcProject/
 
 | Feature | Priority | Description |
 |---|---|---|
-| **Semantic scoring (Redis vector search)** | High | Replace/augment heuristic scoring with embedding-based similarity. Embeddings are stored durably in MongoDB alongside nodes, but the vector index lives in **Redis (RediSearch/Redis Stack)** for sub-millisecond in-memory similarity lookups on the hot path. Redis becomes the "in-memory layer" for embeddings — same pattern as the state tree (in-memory for speed, MongoDB for durability). MongoDB rebuilds the Redis index on startup or after a crash. This would dramatically improve coherency for topic-switching conversations. |
+| **Shared vector tier (Redis / external ANN)** | High | Ship path already uses **in-process dual HNSW + Mongo embeddings**. Moving the graph to **Redis (RediSearch / Redis Stack)** or another shared ANN tier would accelerate cold/warm multi-instance deployments, reduce per-process memory for very large sessions, and centralize vector updates—**not** a prerequisite for semantic retrieval, which works today on a single node. |
 | **Redis Streams for event processing** | Medium | Replace per-session goroutines with Redis Streams for distributed event processing. Enables horizontal scaling — multiple ACGC instances can process events for different sessions. Also provides durable event queues (current channels lose events on crash). |
 | **Policy engine** | Medium | Configurable GC policies per session/task. Aggressive (minimize tokens, accept lower coherency), conservative (preserve more context, higher token cost), balanced (current default). Policy hot-swapping during a session. |
 | **Semantic deduplication** | Medium | Use embeddings to detect near-duplicate nodes (e.g., user asks the same question rephrased). Currently only detects exact title matches. |
