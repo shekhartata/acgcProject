@@ -2,7 +2,7 @@ PROTO_DIR := proto
 API_DIR := api/proto
 BINARY := acgc
 
-.PHONY: proto build run test clean tidy lint mongo mongo-down mongo-logs stresstest eval eval-cached eval-judge eval-semantic eval-semantic-judge stresstest-semantic
+.PHONY: proto build run test clean tidy lint mongo mongo-down mongo-logs mongo-shell stresstest eval eval-cached eval-judge eval-semantic eval-semantic-judge stresstest-semantic latency-bench
 
 # --- Build ---
 
@@ -15,6 +15,7 @@ proto:
 build:
 	go build -o bin/$(BINARY) ./cmd/acgc
 	go build -o bin/testcli ./cmd/testcli
+	go build -o bin/acgc-latencybench ./cmd/acgc-latencybench
 	go build -o bin/stresstest ./stresstest
 	go build -o bin/eval ./eval
 
@@ -93,6 +94,12 @@ eval-semantic-judge:
 # semantic code paths under -race without spending any cents.
 stresstest-semantic:
 	go run -race ./stresstest/ -v -semantic
+
+# --- Latency benchmarking (naive vs grpc Run) ---
+
+latency-bench: build
+	@echo "Built bin/acgc-latencybench. Example (server: semantic on + Mongo + optional ACGC_LATENCY_BREAKDOWN=true):"
+	@echo "  ./bin/acgc-latencybench -grpc localhost:50051 -iterations 30 -discard-n 3 -warm-settle-delay 400ms"
 
 # --- Full Stack ---
 

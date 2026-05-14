@@ -61,6 +61,20 @@ message RunResponse {
   string llm_response = 1;
   PromptStats stats = 2;
   string compiled_prompt_id = 3;
+  RunLatency latency_breakdown = 4;
+}
+
+message RunLatency {
+  // Wall-clock-ish compile phase (covers full CompilePrompt in the gateway hot path).
+  int32 compile_total_ms = 1;
+  int32 compile_embed_ms = 2;
+  int32 compile_index_ms = 3;
+  int32 compile_assembly_ms = 4;
+  // Reserved small bucket for string join/token estimate overhead; typically 0.
+  int32 compose_overhead_ms = 5;
+  int32 llm_ms = 6;
+  // True when heuristic compile was used due to semantic path unavailable or failures.
+  bool semantic_fallback = 7;
 }
 
 message PromptStats {

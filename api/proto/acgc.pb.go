@@ -271,6 +271,7 @@ type RunResponse struct {
 	LlmResponse      string                 `protobuf:"bytes,1,opt,name=llm_response,json=llmResponse,proto3" json:"llm_response,omitempty"`
 	Stats            *PromptStats           `protobuf:"bytes,2,opt,name=stats,proto3" json:"stats,omitempty"`
 	CompiledPromptId string                 `protobuf:"bytes,3,opt,name=compiled_prompt_id,json=compiledPromptId,proto3" json:"compiled_prompt_id,omitempty"`
+	LatencyBreakdown *RunLatency            `protobuf:"bytes,4,opt,name=latency_breakdown,json=latencyBreakdown,proto3" json:"latency_breakdown,omitempty"`
 	unknownFields    protoimpl.UnknownFields
 	sizeCache        protoimpl.SizeCache
 }
@@ -326,6 +327,108 @@ func (x *RunResponse) GetCompiledPromptId() string {
 	return ""
 }
 
+func (x *RunResponse) GetLatencyBreakdown() *RunLatency {
+	if x != nil {
+		return x.LatencyBreakdown
+	}
+	return nil
+}
+
+type RunLatency struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Wall-clock-ish compile phase (covers full CompilePrompt in the gateway hot path).
+	CompileTotalMs    int32 `protobuf:"varint,1,opt,name=compile_total_ms,json=compileTotalMs,proto3" json:"compile_total_ms,omitempty"`
+	CompileEmbedMs    int32 `protobuf:"varint,2,opt,name=compile_embed_ms,json=compileEmbedMs,proto3" json:"compile_embed_ms,omitempty"`
+	CompileIndexMs    int32 `protobuf:"varint,3,opt,name=compile_index_ms,json=compileIndexMs,proto3" json:"compile_index_ms,omitempty"`
+	CompileAssemblyMs int32 `protobuf:"varint,4,opt,name=compile_assembly_ms,json=compileAssemblyMs,proto3" json:"compile_assembly_ms,omitempty"`
+	// Reserved small bucket for string join/token estimate overhead; typically 0.
+	ComposeOverheadMs int32 `protobuf:"varint,5,opt,name=compose_overhead_ms,json=composeOverheadMs,proto3" json:"compose_overhead_ms,omitempty"`
+	LlmMs             int32 `protobuf:"varint,6,opt,name=llm_ms,json=llmMs,proto3" json:"llm_ms,omitempty"`
+	// True when heuristic compile was used due to semantic path unavailable or failures.
+	SemanticFallback bool `protobuf:"varint,7,opt,name=semantic_fallback,json=semanticFallback,proto3" json:"semantic_fallback,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
+}
+
+func (x *RunLatency) Reset() {
+	*x = RunLatency{}
+	mi := &file_acgc_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RunLatency) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RunLatency) ProtoMessage() {}
+
+func (x *RunLatency) ProtoReflect() protoreflect.Message {
+	mi := &file_acgc_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RunLatency.ProtoReflect.Descriptor instead.
+func (*RunLatency) Descriptor() ([]byte, []int) {
+	return file_acgc_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *RunLatency) GetCompileTotalMs() int32 {
+	if x != nil {
+		return x.CompileTotalMs
+	}
+	return 0
+}
+
+func (x *RunLatency) GetCompileEmbedMs() int32 {
+	if x != nil {
+		return x.CompileEmbedMs
+	}
+	return 0
+}
+
+func (x *RunLatency) GetCompileIndexMs() int32 {
+	if x != nil {
+		return x.CompileIndexMs
+	}
+	return 0
+}
+
+func (x *RunLatency) GetCompileAssemblyMs() int32 {
+	if x != nil {
+		return x.CompileAssemblyMs
+	}
+	return 0
+}
+
+func (x *RunLatency) GetComposeOverheadMs() int32 {
+	if x != nil {
+		return x.ComposeOverheadMs
+	}
+	return 0
+}
+
+func (x *RunLatency) GetLlmMs() int32 {
+	if x != nil {
+		return x.LlmMs
+	}
+	return 0
+}
+
+func (x *RunLatency) GetSemanticFallback() bool {
+	if x != nil {
+		return x.SemanticFallback
+	}
+	return false
+}
+
 type PromptStats struct {
 	state              protoimpl.MessageState `protogen:"open.v1"`
 	OriginalTokenCount int32                  `protobuf:"varint,1,opt,name=original_token_count,json=originalTokenCount,proto3" json:"original_token_count,omitempty"`
@@ -343,7 +446,7 @@ type PromptStats struct {
 
 func (x *PromptStats) Reset() {
 	*x = PromptStats{}
-	mi := &file_acgc_proto_msgTypes[4]
+	mi := &file_acgc_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -355,7 +458,7 @@ func (x *PromptStats) String() string {
 func (*PromptStats) ProtoMessage() {}
 
 func (x *PromptStats) ProtoReflect() protoreflect.Message {
-	mi := &file_acgc_proto_msgTypes[4]
+	mi := &file_acgc_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -368,7 +471,7 @@ func (x *PromptStats) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PromptStats.ProtoReflect.Descriptor instead.
 func (*PromptStats) Descriptor() ([]byte, []int) {
-	return file_acgc_proto_rawDescGZIP(), []int{4}
+	return file_acgc_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *PromptStats) GetOriginalTokenCount() int32 {
@@ -447,7 +550,7 @@ type CaptureEventRequest struct {
 
 func (x *CaptureEventRequest) Reset() {
 	*x = CaptureEventRequest{}
-	mi := &file_acgc_proto_msgTypes[5]
+	mi := &file_acgc_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -459,7 +562,7 @@ func (x *CaptureEventRequest) String() string {
 func (*CaptureEventRequest) ProtoMessage() {}
 
 func (x *CaptureEventRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_acgc_proto_msgTypes[5]
+	mi := &file_acgc_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -472,7 +575,7 @@ func (x *CaptureEventRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CaptureEventRequest.ProtoReflect.Descriptor instead.
 func (*CaptureEventRequest) Descriptor() ([]byte, []int) {
-	return file_acgc_proto_rawDescGZIP(), []int{5}
+	return file_acgc_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *CaptureEventRequest) GetSessionId() string {
@@ -520,7 +623,7 @@ type CaptureEventResponse struct {
 
 func (x *CaptureEventResponse) Reset() {
 	*x = CaptureEventResponse{}
-	mi := &file_acgc_proto_msgTypes[6]
+	mi := &file_acgc_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -532,7 +635,7 @@ func (x *CaptureEventResponse) String() string {
 func (*CaptureEventResponse) ProtoMessage() {}
 
 func (x *CaptureEventResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_acgc_proto_msgTypes[6]
+	mi := &file_acgc_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -545,7 +648,7 @@ func (x *CaptureEventResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CaptureEventResponse.ProtoReflect.Descriptor instead.
 func (*CaptureEventResponse) Descriptor() ([]byte, []int) {
-	return file_acgc_proto_rawDescGZIP(), []int{6}
+	return file_acgc_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *CaptureEventResponse) GetEventId() string {
@@ -573,7 +676,7 @@ type GetStateRequest struct {
 
 func (x *GetStateRequest) Reset() {
 	*x = GetStateRequest{}
-	mi := &file_acgc_proto_msgTypes[7]
+	mi := &file_acgc_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -585,7 +688,7 @@ func (x *GetStateRequest) String() string {
 func (*GetStateRequest) ProtoMessage() {}
 
 func (x *GetStateRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_acgc_proto_msgTypes[7]
+	mi := &file_acgc_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -598,7 +701,7 @@ func (x *GetStateRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetStateRequest.ProtoReflect.Descriptor instead.
 func (*GetStateRequest) Descriptor() ([]byte, []int) {
-	return file_acgc_proto_rawDescGZIP(), []int{7}
+	return file_acgc_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *GetStateRequest) GetSessionId() string {
@@ -634,7 +737,7 @@ type GetStateResponse struct {
 
 func (x *GetStateResponse) Reset() {
 	*x = GetStateResponse{}
-	mi := &file_acgc_proto_msgTypes[8]
+	mi := &file_acgc_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -646,7 +749,7 @@ func (x *GetStateResponse) String() string {
 func (*GetStateResponse) ProtoMessage() {}
 
 func (x *GetStateResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_acgc_proto_msgTypes[8]
+	mi := &file_acgc_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -659,7 +762,7 @@ func (x *GetStateResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetStateResponse.ProtoReflect.Descriptor instead.
 func (*GetStateResponse) Descriptor() ([]byte, []int) {
-	return file_acgc_proto_rawDescGZIP(), []int{8}
+	return file_acgc_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *GetStateResponse) GetSessionId() string {
@@ -712,7 +815,7 @@ type StateNode struct {
 
 func (x *StateNode) Reset() {
 	*x = StateNode{}
-	mi := &file_acgc_proto_msgTypes[9]
+	mi := &file_acgc_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -724,7 +827,7 @@ func (x *StateNode) String() string {
 func (*StateNode) ProtoMessage() {}
 
 func (x *StateNode) ProtoReflect() protoreflect.Message {
-	mi := &file_acgc_proto_msgTypes[9]
+	mi := &file_acgc_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -737,7 +840,7 @@ func (x *StateNode) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StateNode.ProtoReflect.Descriptor instead.
 func (*StateNode) Descriptor() ([]byte, []int) {
-	return file_acgc_proto_rawDescGZIP(), []int{9}
+	return file_acgc_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *StateNode) GetNodeId() string {
@@ -851,7 +954,7 @@ type NodeScores struct {
 
 func (x *NodeScores) Reset() {
 	*x = NodeScores{}
-	mi := &file_acgc_proto_msgTypes[10]
+	mi := &file_acgc_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -863,7 +966,7 @@ func (x *NodeScores) String() string {
 func (*NodeScores) ProtoMessage() {}
 
 func (x *NodeScores) ProtoReflect() protoreflect.Message {
-	mi := &file_acgc_proto_msgTypes[10]
+	mi := &file_acgc_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -876,7 +979,7 @@ func (x *NodeScores) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use NodeScores.ProtoReflect.Descriptor instead.
 func (*NodeScores) Descriptor() ([]byte, []int) {
-	return file_acgc_proto_rawDescGZIP(), []int{10}
+	return file_acgc_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *NodeScores) GetSemanticRelevance() float32 {
@@ -928,7 +1031,7 @@ type TreeStats struct {
 
 func (x *TreeStats) Reset() {
 	*x = TreeStats{}
-	mi := &file_acgc_proto_msgTypes[11]
+	mi := &file_acgc_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -940,7 +1043,7 @@ func (x *TreeStats) String() string {
 func (*TreeStats) ProtoMessage() {}
 
 func (x *TreeStats) ProtoReflect() protoreflect.Message {
-	mi := &file_acgc_proto_msgTypes[11]
+	mi := &file_acgc_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -953,7 +1056,7 @@ func (x *TreeStats) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TreeStats.ProtoReflect.Descriptor instead.
 func (*TreeStats) Descriptor() ([]byte, []int) {
-	return file_acgc_proto_rawDescGZIP(), []int{11}
+	return file_acgc_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *TreeStats) GetTotalNodes() int32 {
@@ -1008,7 +1111,7 @@ type TriggerGCRequest struct {
 
 func (x *TriggerGCRequest) Reset() {
 	*x = TriggerGCRequest{}
-	mi := &file_acgc_proto_msgTypes[12]
+	mi := &file_acgc_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1020,7 +1123,7 @@ func (x *TriggerGCRequest) String() string {
 func (*TriggerGCRequest) ProtoMessage() {}
 
 func (x *TriggerGCRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_acgc_proto_msgTypes[12]
+	mi := &file_acgc_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1033,7 +1136,7 @@ func (x *TriggerGCRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TriggerGCRequest.ProtoReflect.Descriptor instead.
 func (*TriggerGCRequest) Descriptor() ([]byte, []int) {
-	return file_acgc_proto_rawDescGZIP(), []int{12}
+	return file_acgc_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *TriggerGCRequest) GetSessionId() string {
@@ -1063,7 +1166,7 @@ type TriggerGCResponse struct {
 
 func (x *TriggerGCResponse) Reset() {
 	*x = TriggerGCResponse{}
-	mi := &file_acgc_proto_msgTypes[13]
+	mi := &file_acgc_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1075,7 +1178,7 @@ func (x *TriggerGCResponse) String() string {
 func (*TriggerGCResponse) ProtoMessage() {}
 
 func (x *TriggerGCResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_acgc_proto_msgTypes[13]
+	mi := &file_acgc_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1088,7 +1191,7 @@ func (x *TriggerGCResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TriggerGCResponse.ProtoReflect.Descriptor instead.
 func (*TriggerGCResponse) Descriptor() ([]byte, []int) {
-	return file_acgc_proto_rawDescGZIP(), []int{13}
+	return file_acgc_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *TriggerGCResponse) GetTriggered() bool {
@@ -1135,7 +1238,7 @@ type GetMetricsRequest struct {
 
 func (x *GetMetricsRequest) Reset() {
 	*x = GetMetricsRequest{}
-	mi := &file_acgc_proto_msgTypes[14]
+	mi := &file_acgc_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1147,7 +1250,7 @@ func (x *GetMetricsRequest) String() string {
 func (*GetMetricsRequest) ProtoMessage() {}
 
 func (x *GetMetricsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_acgc_proto_msgTypes[14]
+	mi := &file_acgc_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1160,7 +1263,7 @@ func (x *GetMetricsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetMetricsRequest.ProtoReflect.Descriptor instead.
 func (*GetMetricsRequest) Descriptor() ([]byte, []int) {
-	return file_acgc_proto_rawDescGZIP(), []int{14}
+	return file_acgc_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *GetMetricsRequest) GetSessionId() string {
@@ -1188,7 +1291,7 @@ type GetMetricsResponse struct {
 
 func (x *GetMetricsResponse) Reset() {
 	*x = GetMetricsResponse{}
-	mi := &file_acgc_proto_msgTypes[15]
+	mi := &file_acgc_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1200,7 +1303,7 @@ func (x *GetMetricsResponse) String() string {
 func (*GetMetricsResponse) ProtoMessage() {}
 
 func (x *GetMetricsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_acgc_proto_msgTypes[15]
+	mi := &file_acgc_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1213,7 +1316,7 @@ func (x *GetMetricsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetMetricsResponse.ProtoReflect.Descriptor instead.
 func (*GetMetricsResponse) Descriptor() ([]byte, []int) {
-	return file_acgc_proto_rawDescGZIP(), []int{15}
+	return file_acgc_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *GetMetricsResponse) GetSessionId() string {
@@ -1316,11 +1419,21 @@ const file_acgc_proto_rawDesc = "" +
 	"\acontent\x18\x02 \x01(\tR\acontent\x12\x12\n" +
 	"\x04name\x18\x03 \x01(\tR\x04name\x12 \n" +
 	"\ftool_call_id\x18\x04 \x01(\tR\n" +
-	"toolCallId\"\x8a\x01\n" +
+	"toolCallId\"\xcc\x01\n" +
 	"\vRunResponse\x12!\n" +
 	"\fllm_response\x18\x01 \x01(\tR\vllmResponse\x12*\n" +
 	"\x05stats\x18\x02 \x01(\v2\x14.acgc.v1.PromptStatsR\x05stats\x12,\n" +
-	"\x12compiled_prompt_id\x18\x03 \x01(\tR\x10compiledPromptId\"\xf6\x02\n" +
+	"\x12compiled_prompt_id\x18\x03 \x01(\tR\x10compiledPromptId\x12@\n" +
+	"\x11latency_breakdown\x18\x04 \x01(\v2\x13.acgc.v1.RunLatencyR\x10latencyBreakdown\"\xae\x02\n" +
+	"\n" +
+	"RunLatency\x12(\n" +
+	"\x10compile_total_ms\x18\x01 \x01(\x05R\x0ecompileTotalMs\x12(\n" +
+	"\x10compile_embed_ms\x18\x02 \x01(\x05R\x0ecompileEmbedMs\x12(\n" +
+	"\x10compile_index_ms\x18\x03 \x01(\x05R\x0ecompileIndexMs\x12.\n" +
+	"\x13compile_assembly_ms\x18\x04 \x01(\x05R\x11compileAssemblyMs\x12.\n" +
+	"\x13compose_overhead_ms\x18\x05 \x01(\x05R\x11composeOverheadMs\x12\x15\n" +
+	"\x06llm_ms\x18\x06 \x01(\x05R\x05llmMs\x12+\n" +
+	"\x11semantic_fallback\x18\a \x01(\bR\x10semanticFallback\"\xf6\x02\n" +
 	"\vPromptStats\x120\n" +
 	"\x14original_token_count\x18\x01 \x01(\x05R\x12originalTokenCount\x120\n" +
 	"\x14compiled_token_count\x18\x02 \x01(\x05R\x12compiledTokenCount\x12!\n" +
@@ -1441,53 +1554,55 @@ func file_acgc_proto_rawDescGZIP() []byte {
 	return file_acgc_proto_rawDescData
 }
 
-var file_acgc_proto_msgTypes = make([]protoimpl.MessageInfo, 17)
+var file_acgc_proto_msgTypes = make([]protoimpl.MessageInfo, 18)
 var file_acgc_proto_goTypes = []any{
 	(*RunRequest)(nil),            // 0: acgc.v1.RunRequest
 	(*LLMConfig)(nil),             // 1: acgc.v1.LLMConfig
 	(*Message)(nil),               // 2: acgc.v1.Message
 	(*RunResponse)(nil),           // 3: acgc.v1.RunResponse
-	(*PromptStats)(nil),           // 4: acgc.v1.PromptStats
-	(*CaptureEventRequest)(nil),   // 5: acgc.v1.CaptureEventRequest
-	(*CaptureEventResponse)(nil),  // 6: acgc.v1.CaptureEventResponse
-	(*GetStateRequest)(nil),       // 7: acgc.v1.GetStateRequest
-	(*GetStateResponse)(nil),      // 8: acgc.v1.GetStateResponse
-	(*StateNode)(nil),             // 9: acgc.v1.StateNode
-	(*NodeScores)(nil),            // 10: acgc.v1.NodeScores
-	(*TreeStats)(nil),             // 11: acgc.v1.TreeStats
-	(*TriggerGCRequest)(nil),      // 12: acgc.v1.TriggerGCRequest
-	(*TriggerGCResponse)(nil),     // 13: acgc.v1.TriggerGCResponse
-	(*GetMetricsRequest)(nil),     // 14: acgc.v1.GetMetricsRequest
-	(*GetMetricsResponse)(nil),    // 15: acgc.v1.GetMetricsResponse
-	nil,                           // 16: acgc.v1.CaptureEventRequest.MetadataEntry
-	(*timestamppb.Timestamp)(nil), // 17: google.protobuf.Timestamp
+	(*RunLatency)(nil),            // 4: acgc.v1.RunLatency
+	(*PromptStats)(nil),           // 5: acgc.v1.PromptStats
+	(*CaptureEventRequest)(nil),   // 6: acgc.v1.CaptureEventRequest
+	(*CaptureEventResponse)(nil),  // 7: acgc.v1.CaptureEventResponse
+	(*GetStateRequest)(nil),       // 8: acgc.v1.GetStateRequest
+	(*GetStateResponse)(nil),      // 9: acgc.v1.GetStateResponse
+	(*StateNode)(nil),             // 10: acgc.v1.StateNode
+	(*NodeScores)(nil),            // 11: acgc.v1.NodeScores
+	(*TreeStats)(nil),             // 12: acgc.v1.TreeStats
+	(*TriggerGCRequest)(nil),      // 13: acgc.v1.TriggerGCRequest
+	(*TriggerGCResponse)(nil),     // 14: acgc.v1.TriggerGCResponse
+	(*GetMetricsRequest)(nil),     // 15: acgc.v1.GetMetricsRequest
+	(*GetMetricsResponse)(nil),    // 16: acgc.v1.GetMetricsResponse
+	nil,                           // 17: acgc.v1.CaptureEventRequest.MetadataEntry
+	(*timestamppb.Timestamp)(nil), // 18: google.protobuf.Timestamp
 }
 var file_acgc_proto_depIdxs = []int32{
 	1,  // 0: acgc.v1.RunRequest.llm_config:type_name -> acgc.v1.LLMConfig
 	2,  // 1: acgc.v1.RunRequest.conversation_history:type_name -> acgc.v1.Message
-	4,  // 2: acgc.v1.RunResponse.stats:type_name -> acgc.v1.PromptStats
-	16, // 3: acgc.v1.CaptureEventRequest.metadata:type_name -> acgc.v1.CaptureEventRequest.MetadataEntry
-	9,  // 4: acgc.v1.GetStateResponse.nodes:type_name -> acgc.v1.StateNode
-	11, // 5: acgc.v1.GetStateResponse.tree_stats:type_name -> acgc.v1.TreeStats
-	10, // 6: acgc.v1.StateNode.scores:type_name -> acgc.v1.NodeScores
-	17, // 7: acgc.v1.StateNode.created_at:type_name -> google.protobuf.Timestamp
-	17, // 8: acgc.v1.StateNode.updated_at:type_name -> google.protobuf.Timestamp
-	17, // 9: acgc.v1.GetMetricsResponse.session_started_at:type_name -> google.protobuf.Timestamp
-	0,  // 10: acgc.v1.ACGCService.Run:input_type -> acgc.v1.RunRequest
-	5,  // 11: acgc.v1.ACGCService.CaptureEvent:input_type -> acgc.v1.CaptureEventRequest
-	7,  // 12: acgc.v1.ACGCService.GetState:input_type -> acgc.v1.GetStateRequest
-	12, // 13: acgc.v1.ACGCService.TriggerGC:input_type -> acgc.v1.TriggerGCRequest
-	14, // 14: acgc.v1.ACGCService.GetMetrics:input_type -> acgc.v1.GetMetricsRequest
-	3,  // 15: acgc.v1.ACGCService.Run:output_type -> acgc.v1.RunResponse
-	6,  // 16: acgc.v1.ACGCService.CaptureEvent:output_type -> acgc.v1.CaptureEventResponse
-	8,  // 17: acgc.v1.ACGCService.GetState:output_type -> acgc.v1.GetStateResponse
-	13, // 18: acgc.v1.ACGCService.TriggerGC:output_type -> acgc.v1.TriggerGCResponse
-	15, // 19: acgc.v1.ACGCService.GetMetrics:output_type -> acgc.v1.GetMetricsResponse
-	15, // [15:20] is the sub-list for method output_type
-	10, // [10:15] is the sub-list for method input_type
-	10, // [10:10] is the sub-list for extension type_name
-	10, // [10:10] is the sub-list for extension extendee
-	0,  // [0:10] is the sub-list for field type_name
+	5,  // 2: acgc.v1.RunResponse.stats:type_name -> acgc.v1.PromptStats
+	4,  // 3: acgc.v1.RunResponse.latency_breakdown:type_name -> acgc.v1.RunLatency
+	17, // 4: acgc.v1.CaptureEventRequest.metadata:type_name -> acgc.v1.CaptureEventRequest.MetadataEntry
+	10, // 5: acgc.v1.GetStateResponse.nodes:type_name -> acgc.v1.StateNode
+	12, // 6: acgc.v1.GetStateResponse.tree_stats:type_name -> acgc.v1.TreeStats
+	11, // 7: acgc.v1.StateNode.scores:type_name -> acgc.v1.NodeScores
+	18, // 8: acgc.v1.StateNode.created_at:type_name -> google.protobuf.Timestamp
+	18, // 9: acgc.v1.StateNode.updated_at:type_name -> google.protobuf.Timestamp
+	18, // 10: acgc.v1.GetMetricsResponse.session_started_at:type_name -> google.protobuf.Timestamp
+	0,  // 11: acgc.v1.ACGCService.Run:input_type -> acgc.v1.RunRequest
+	6,  // 12: acgc.v1.ACGCService.CaptureEvent:input_type -> acgc.v1.CaptureEventRequest
+	8,  // 13: acgc.v1.ACGCService.GetState:input_type -> acgc.v1.GetStateRequest
+	13, // 14: acgc.v1.ACGCService.TriggerGC:input_type -> acgc.v1.TriggerGCRequest
+	15, // 15: acgc.v1.ACGCService.GetMetrics:input_type -> acgc.v1.GetMetricsRequest
+	3,  // 16: acgc.v1.ACGCService.Run:output_type -> acgc.v1.RunResponse
+	7,  // 17: acgc.v1.ACGCService.CaptureEvent:output_type -> acgc.v1.CaptureEventResponse
+	9,  // 18: acgc.v1.ACGCService.GetState:output_type -> acgc.v1.GetStateResponse
+	14, // 19: acgc.v1.ACGCService.TriggerGC:output_type -> acgc.v1.TriggerGCResponse
+	16, // 20: acgc.v1.ACGCService.GetMetrics:output_type -> acgc.v1.GetMetricsResponse
+	16, // [16:21] is the sub-list for method output_type
+	11, // [11:16] is the sub-list for method input_type
+	11, // [11:11] is the sub-list for extension type_name
+	11, // [11:11] is the sub-list for extension extendee
+	0,  // [0:11] is the sub-list for field type_name
 }
 
 func init() { file_acgc_proto_init() }
@@ -1501,7 +1616,7 @@ func file_acgc_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_acgc_proto_rawDesc), len(file_acgc_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   17,
+			NumMessages:   18,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

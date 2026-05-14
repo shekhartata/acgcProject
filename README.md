@@ -29,6 +29,7 @@ A Go sidecar runtime that sits between an AI agent and its LLM, intercepting eve
   - [gRPC API](#grpc-api)
   - [Interactive Test Client](#interactive-test-client)
 - [Stress Testing](#stress-testing)
+  - [Latency evaluation (`acgc-latencybench`)](#semantic-latency-benchmarking-acgc-latencybench)
 - [Quality Evaluation (LLM harness)](#quality-evaluation-llm-harness)
 - [Project Structure](#project-structure)
 - [Current Status vs Roadmap](#current-status-vs-roadmap)
@@ -339,6 +340,7 @@ make eval-clean && make eval-semantic-judge
 | `ACGC_EMBED_API_KEY` | (falls back to `ACGC_LLM_API_KEY`) | Key for embedding calls |
 | `ACGC_EMBED_MODEL` | `text-embedding-3-small` | Embedding model name |
 | `ACGC_EMBED_DIM` | `1536` | Vector dimension (must match model) |
+| `ACGC_LATENCY_BREAKDOWN` | `false` | When `true`, `RunResponse` may include `latency_breakdown` (compile phases + `llm_ms`; minimal overhead when off) |
 
 ---
 
@@ -441,6 +443,76 @@ make stresstest-export
 # Custom options
 ./bin/stresstest -budget 6000 -v -semantic -export stresstest/results.json -skip-concurrency
 ```
+
+### Semantic latency benchmarking (`acgc-latencybench`)
+
+The **`acgc-latencybench`** binary (`cmd/acgc-latencybench` + `internal/latencybench/`) measures **how long each path takes** under a repeatable fixture: it runs a **naive baseline** (one direct LLM call with the full scripted transcript) and **`Run`** over **gRPC** to a live **`./bin/acgc`** server.
+
+#### Follow these steps
+
+1. **Start MongoDB** (if local): `make mongo`.
+2. **Configure the server** in `.env` or your shell:
+   - **`ACGC_SEMANTIC_ENABLED=true`** + **`ACGC_EMBED_API_KEY`** (or rely on fallback to **`ACGC_LLM_API_KEY`**) when you want semantic compile paths exercised.
+   - **`ACGC_LATENCY_BREAKDOWN=true`** when you want **`RunResponse.latency_breakdown`** filled (`compile_*` buckets + **`llm_ms`**). With it **off**, percentiles for server breakdown stay empty — **not** zero latency.
+3. **Start the daemon**: `make build && ./bin/acgc`.
+4. **Run the bench** (same machine env as eval for **`ACGC_LLM_*`**):
+
+```bash
+make latency-bench
+./bin/acgc-latencybench -grpc localhost:50051 -iterations 30 -discard-n 5 \
+  -warm-settle-delay 400ms -output json > latency_report.json
+```
+
+5. **Read the report**: JSON prints to **stdout** (redirect as above). Warnings (e.g. missing breakdown) go to **stderr**.
+
+Use **`./bin/acgc-latencybench -h`** for flags (`-sessions`, `-warm-turns`, `-fixture`, `-concurrency`, `-enforce-semantic`, etc.).
+
+#### What each number means
+
+| Output bucket | What it actually measures |
+|---------------|---------------------------|
+| **`baseline_llm_ms`** | Client-side wall clock around **one** **`Generate`** call: scripted **system + all warm turns + probe** (no ACGC compile). |
+| **`acgc_run_round_trip_ms`** | Client-side wall clock for the entire **`Run`** RPC = **compile + server LLM + tiny gRPC overhead**. **Includes LLM time**, not “non-LLM only.” |
+| **`latency_breakdown.llm_ms`** | Server-side wall clock around **`Generate`** inside the gateway (**upstream model only**, after compile). |
+| **`latency_breakdown.compile_total_ms`** | Server-side wall clock around **`CompilePrompt`** (embedding / HNSW / Markdown assembly roll-up). |
+| **`latency_breakdown.compile_embed_ms`** | Time in **`Embed`** at compile time (often close to **`compile_total`** when index + assembly are sub‑millisecond). |
+
+**Percentiles:**
+
+| Stat | Plain-language meaning |
+|------|-------------------------|
+| **P50** | **Median** — half of samples are faster, half slower (“typical” run). |
+| **P95** | **Tail** — 95% of samples finish within this time; captures noisy providers / contention. |
+| **P99** | **Extreme tail** — rare slow runs (GC spikes, slow embeds, API stalls). |
+
+The harness applies **`-discard-n N`** by dropping the **first N iterations by index** from percentile summaries only (burn-in); raw **`samples`** still list every iteration.
+
+#### Major driver (what dominates latency)
+
+Inside a successful **`Run`**, **`llm_ms` ≫ `compile_total_ms`** in typical setups: **upstream LLM generation is the largest component**. Compile adds **hundreds of ms to a few seconds** on semantic paths; **`run_round_trip` ≈ `compile_total_ms` + `llm_ms`** (+ small slack).
+
+Baseline **`baseline_llm_ms`** vs server **`llm_ms`** are **not identical prompts** (verbatim transcript vs compiled **`FinalPrompt` + probe framing), so **longer `llm_ms` does not imply a timer bug** — it usually means **different prompt/output workload**.
+
+#### Recorded example run (reference numbers)
+
+Below is one **representative** bench captured **2026-05-14**: **`localhost:50051`**, **`iterations=30`**, **`discard_n=5`**, **`concurrency=2`**, default embedded fixture (**2 warm pairs**, probe about **`go.mod` `replace` directives**), **`ACGC_LATENCY_BREAKDOWN=true`**, model **`gpt-5`** via OpenAI-compatible API. **Two iterations** hit transient **`connection reset by peer`** errors and are **excluded** from the percentile aggregates below.
+
+**End-to-end comparison** — naive vs full **`Run`** (**both include baseline-side LLM only on the baseline column**; ACGC column is **full RPC** including compile **and** server LLM):
+
+| Metric | P50 (median) | P95 (tail) | P99 (extreme tail) |
+|--------|-------------:|-----------:|-------------------:|
+| Naive baseline LLM wall | 9.3 s | 15.0 s | 18.1 s |
+| ACGC **`Run`** client RTT | 11.6 s | 19.2 s | 22.0 s |
+| **Net Δ** (ACGC − baseline) | **+2.3 s** | **+4.2 s** | **+3.8 s** |
+
+**Inside ACGC `Run`** (server **`latency_breakdown`** — same percentile basis):
+
+| Component | P50 | P95 | P99 |
+|-----------|----:|----:|----:|
+| **`llm_ms`** (upstream completion) | 11.2 s | 18.8 s | 21.2 s |
+| **`compile_total_ms`** | 0.65 s | 1.05 s | 2.39 s |
+
+**Takeaway:** On this fixture, **`Run`** was **~2–4 s slower at median/tail** than sending the naive transcript once; **most of wall clock inside `Run` is still `llm_ms`**. Your numbers will vary with **model**, **network**, **`warm-settle-delay`**, and **`discard_n`**.
 
 ### What It Tests
 

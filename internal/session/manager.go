@@ -48,6 +48,8 @@ type Manager struct {
 	topKAtCompile  int
 	archiveTopK    int
 	hnswConfig     vectorindex.Config
+
+	latencyBreakdown bool
 }
 
 type ManagerConfig struct {
@@ -66,6 +68,8 @@ type ManagerConfig struct {
 	TopKAtCompile        int
 	ArchiveTopKAtCompile int
 	HNSWConfig           vectorindex.Config
+
+	LatencyBreakdown bool
 }
 
 func NewManager(cfg ManagerConfig) *Manager {
@@ -78,19 +82,20 @@ func NewManager(cfg ManagerConfig) *Manager {
 		archK = 12
 	}
 	return &Manager{
-		sessions:       make(map[string]*SessionState),
-		store:          cfg.Store,
-		scorer:         cfg.Scorer,
-		gc:             cfg.GC,
-		compilerBudget: cfg.TokenBudget,
-		channelBuffer:  cfg.ChannelBuffer,
-		idleTimeout:    time.Duration(cfg.IdleTimeoutS) * time.Second,
-		snapshotEvery:  time.Duration(cfg.SnapshotEveryS) * time.Second,
-		embedder:       cfg.Embedder,
-		semanticWeight: cfg.SemanticWeight,
-		topKAtCompile:  topK,
-		archiveTopK:    archK,
-		hnswConfig:     cfg.HNSWConfig,
+		sessions:         make(map[string]*SessionState),
+		store:            cfg.Store,
+		scorer:           cfg.Scorer,
+		gc:               cfg.GC,
+		compilerBudget:   cfg.TokenBudget,
+		channelBuffer:    cfg.ChannelBuffer,
+		idleTimeout:      time.Duration(cfg.IdleTimeoutS) * time.Second,
+		snapshotEvery:    time.Duration(cfg.SnapshotEveryS) * time.Second,
+		embedder:         cfg.Embedder,
+		semanticWeight:   cfg.SemanticWeight,
+		topKAtCompile:    topK,
+		archiveTopK:      archK,
+		hnswConfig:       cfg.HNSWConfig,
+		latencyBreakdown: cfg.LatencyBreakdown,
 	}
 }
 
@@ -181,6 +186,9 @@ func (m *Manager) GetOrCreate(ctx context.Context, sessionID, taskID string) *Se
 // re-blends scores in a single pass, boosting nodes semantically close to the
 // current query — including archived nodes when they match.
 func (m *Manager) CompilePrompt(sessionID, taskID, userMessage, systemPrompt string) *domain.CompiledPrompt {
+	if m.latencyBreakdown {
+		return m.compilePromptMeasured(sessionID, taskID, userMessage, systemPrompt)
+	}
 	m.mu.RLock()
 	state, ok := m.sessions[sessionID]
 	m.mu.RUnlock()
@@ -239,6 +247,99 @@ func (m *Manager) CompilePrompt(sessionID, taskID, userMessage, systemPrompt str
 
 	return comp.CompileWithSemantic(sessionID, taskID, userMessage, compileNodes,
 		systemPrompt, m.semanticWeight, merged)
+}
+
+func (m *Manager) compilePromptMeasured(sessionID, taskID, userMessage, systemPrompt string) *domain.CompiledPrompt {
+	compileOuter := time.Now()
+
+	m.mu.RLock()
+	state, ok := m.sessions[sessionID]
+	m.mu.RUnlock()
+
+	if !ok {
+		return &domain.CompiledPrompt{
+			CompiledPromptID:   fmt.Sprintf("cp_%d", time.Now().UnixNano()),
+			SessionID:          sessionID,
+			TaskID:             taskID,
+			CurrentUserMessage: userMessage,
+			SystemPrompt:       systemPrompt,
+			FinalPrompt:        "",
+			OriginalTokenCount: estimateTokens(systemPrompt) + estimateTokens(userMessage),
+			CompiledTokenCount: estimateTokens(systemPrompt) + estimateTokens(userMessage),
+			CreatedAt:          time.Now(),
+		}
+	}
+
+	bd := &domain.CompileLatencyBreakdown{}
+
+	activeNodes := state.Tree.GetActiveNodes()
+	comp := compiler.NewCompiler(m.compilerBudget)
+
+	if !m.semanticEnabled() || state.ActiveIndex == nil || state.ArchiveIndex == nil || userMessage == "" {
+		tAsm := time.Now()
+		cp := comp.Compile(sessionID, taskID, userMessage, activeNodes, systemPrompt)
+		bd.CompileAssemblyMs = int32(time.Since(tAsm).Milliseconds())
+		bd.SemanticFallback = true
+		bd.CompileTotalMs = int32(time.Since(compileOuter).Milliseconds())
+		cp.LatencyBreakdown = bd
+		return cp
+	}
+
+	embedCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	tEmb := time.Now()
+	queryVec, err := m.embedder.Embed(embedCtx, userMessage)
+	bd.CompileEmbedMs = int32(time.Since(tEmb).Milliseconds())
+	if err != nil {
+		log.Printf("session: compile-time embed failed for %s: %v", sessionID, err)
+		tAsm := time.Now()
+		cp := comp.Compile(sessionID, taskID, userMessage, activeNodes, systemPrompt)
+		bd.CompileAssemblyMs = int32(time.Since(tAsm).Milliseconds())
+		bd.SemanticFallback = true
+		bd.CompileTotalMs = int32(time.Since(compileOuter).Milliseconds())
+		cp.LatencyBreakdown = bd
+		return cp
+	}
+
+	ka := m.topKAtCompile
+	kz := m.archiveTopK
+	tIdx := time.Now()
+	hitsA, err := state.ActiveIndex.Query(queryVec, ka)
+	if err != nil {
+		log.Printf("session: active HNSW query failed for %s: %v", sessionID, err)
+		bd.CompileIndexMs = int32(time.Since(tIdx).Milliseconds())
+		tAsm := time.Now()
+		cp := comp.Compile(sessionID, taskID, userMessage, activeNodes, systemPrompt)
+		bd.CompileAssemblyMs = int32(time.Since(tAsm).Milliseconds())
+		bd.SemanticFallback = true
+		bd.CompileTotalMs = int32(time.Since(compileOuter).Milliseconds())
+		cp.LatencyBreakdown = bd
+		return cp
+	}
+	hitsZ, err := state.ArchiveIndex.Query(queryVec, kz)
+	bd.CompileIndexMs = int32(time.Since(tIdx).Milliseconds())
+	if err != nil {
+		log.Printf("session: archive HNSW query failed for %s: %v", sessionID, err)
+		tAsm := time.Now()
+		cp := comp.Compile(sessionID, taskID, userMessage, activeNodes, systemPrompt)
+		bd.CompileAssemblyMs = int32(time.Since(tAsm).Milliseconds())
+		bd.SemanticFallback = true
+		bd.CompileTotalMs = int32(time.Since(compileOuter).Milliseconds())
+		cp.LatencyBreakdown = bd
+		return cp
+	}
+	merged := MergeSemanticHits(hitsA, hitsZ)
+	compileNodes := NodesForSemanticCompile(state.Tree, activeNodes, merged)
+
+	tAsm := time.Now()
+	cp := comp.CompileWithSemantic(sessionID, taskID, userMessage, compileNodes,
+		systemPrompt, m.semanticWeight, merged)
+	bd.CompileAssemblyMs = int32(time.Since(tAsm).Milliseconds())
+	bd.SemanticFallback = false
+	bd.CompileTotalMs = int32(time.Since(compileOuter).Milliseconds())
+	cp.LatencyBreakdown = bd
+	return cp
 }
 
 // EnqueueEvent sends an event to the session's async worker (non-blocking).

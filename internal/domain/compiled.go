@@ -2,6 +2,15 @@ package domain
 
 import "time"
 
+type CompileLatencyBreakdown struct {
+	CompileTotalMs    int32 `json:"compile_total_ms,omitempty"`
+	CompileEmbedMs    int32 `json:"compile_embed_ms,omitempty"`
+	CompileIndexMs    int32 `json:"compile_index_ms,omitempty"`
+	CompileAssemblyMs int32 `json:"compile_assembly_ms,omitempty"`
+	ComposeOverheadMs int32 `json:"compose_overhead_ms,omitempty"`
+	SemanticFallback  bool  `json:"semantic_fallback,omitempty"`
+}
+
 type CompiledPrompt struct {
 	CompiledPromptID   string `json:"compiled_prompt_id"`
 	SessionID          string `json:"session_id"`
@@ -22,6 +31,8 @@ type CompiledPrompt struct {
 	OriginalTokenCount  int       `json:"original_token_count"`
 	CompiledTokenCount  int       `json:"compiled_token_count"`
 	CreatedAt           time.Time `json:"created_at"`
+	// LatencyBreakdown is non-nil only when ACGC_LATENCY_BREAKDOWN is enabled on the server.
+	LatencyBreakdown *CompileLatencyBreakdown `json:"latency_breakdown,omitempty"`
 }
 
 type SessionMetrics struct {

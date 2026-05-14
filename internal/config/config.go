@@ -58,6 +58,9 @@ type Config struct {
 	EmbedAPIKey         string
 	EmbedModel          string
 	EmbedDim            int
+
+	// When true, RunResponse may include CompilePrompt + LLM latency breakdown fields.
+	LatencyBreakdown bool
 }
 
 func Load() *Config {
@@ -111,6 +114,8 @@ func Load() *Config {
 		EmbedAPIKey: envOrDefault("ACGC_EMBED_API_KEY", os.Getenv("ACGC_LLM_API_KEY")),
 		EmbedModel:  envOrDefault("ACGC_EMBED_MODEL", "text-embedding-3-small"),
 		EmbedDim:    envOrDefaultInt("ACGC_EMBED_DIM", 1536),
+
+		LatencyBreakdown: envOrDefaultBool("ACGC_LATENCY_BREAKDOWN", false),
 	}
 }
 

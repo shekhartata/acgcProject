@@ -65,7 +65,9 @@ func (s *Server) Run(ctx context.Context, req *pb.RunRequest) (*pb.RunResponse, 
 		}
 	}
 
+	tCompile := time.Now()
 	compiled := s.sessions.CompilePrompt(sessionID, taskID, req.UserMessage, systemPrompt)
+	compileWall := time.Since(tCompile)
 
 	// Select LLM client
 	llmClient := s.selectLLMClient(req.LlmConfig)
@@ -95,7 +97,9 @@ func (s *Server) Run(ctx context.Context, req *pb.RunRequest) (*pb.RunResponse, 
 		}
 	}
 
+	tLLM := time.Now()
 	result, err := llmClient.Generate(ctx, messages, temperature, maxTokens)
+	llmDur := time.Since(tLLM)
 	if err != nil {
 		return nil, fmt.Errorf("llm generate: %w", err)
 	}
@@ -129,7 +133,7 @@ func (s *Server) Run(ctx context.Context, req *pb.RunRequest) (*pb.RunResponse, 
 	// Gather tree stats for the response
 	_, activeNodes, compressedNodes, archivedNodes, _, _, _ := s.sessions.GetTreeStats(sessionID)
 
-	return &pb.RunResponse{
+	resp := &pb.RunResponse{
 		LlmResponse:      result.Content,
 		CompiledPromptId: compiled.CompiledPromptID,
 		Stats: &pb.PromptStats{
@@ -141,7 +145,21 @@ func (s *Server) Run(ctx context.Context, req *pb.RunRequest) (*pb.RunResponse, 
 			CompressedNodes:    int32(compressedNodes),
 			ArchivedNodes:      int32(archivedNodes),
 		},
-	}, nil
+	}
+
+	if bd := compiled.LatencyBreakdown; bd != nil {
+		resp.LatencyBreakdown = &pb.RunLatency{
+			CompileTotalMs:    int32(compileWall.Milliseconds()),
+			CompileEmbedMs:    bd.CompileEmbedMs,
+			CompileIndexMs:    bd.CompileIndexMs,
+			CompileAssemblyMs: bd.CompileAssemblyMs,
+			ComposeOverheadMs: bd.ComposeOverheadMs,
+			LlmMs:             int32(llmDur.Milliseconds()),
+			SemanticFallback:  bd.SemanticFallback,
+		}
+	}
+
+	return resp, nil
 }
 
 func (s *Server) CaptureEvent(ctx context.Context, req *pb.CaptureEventRequest) (*pb.CaptureEventResponse, error) {
