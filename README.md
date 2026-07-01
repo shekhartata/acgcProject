@@ -580,36 +580,51 @@ make eval-semantic-judge
 
 Equivalent: `go run ./eval -v -semantic -judge`
 
-### Recorded run (**2026-05-13**)
+### Recorded run (**2026-07-01**)
 
-Configuration as executed: **`gpt-5`** for answer + judge generations (from **`ACGC_LLM_MODEL`** / env), embeddings via **`go run`** flag **`-semantic`** (`text-embedding-3-small`), semantic weight **0.20**, top-K **12**, archive semantic top-K **12**. **8 probe pairs**, **~27.9k** live tokens billed for answers, embeddings, and judge calls combined on that run.
+Configuration as executed: **`gpt-5`** for answer + judge generations (from **`ACGC_LLM_MODEL`** / env), embeddings via **`-semantic`** (`text-embedding-3-small`), semantic weight **0.20**, top-K **12**, archive semantic top-K **12**, LLM judge on, raised answer cap via **`-max-tokens`** (see below). **Three strategies compared** — `naive_full_history` (reference), `sliding_window`, `acgc` — across **7 scenarios / 12 probes each** (24 candidate-vs-reference pairs).
 
-#### Aggregate summary
+#### Aggregate summary (per strategy, 12 probes)
 
-| Metric | Baseline | ACGC |
-|---|---:|---:|
-| Avg quality (/5.0) | 3.44 | **3.75** |
-| Avg prompt token reduction (positive = fewer tokens vs baseline) | — | **+10.9%** |
-| Avg IPT (quality ÷ prompt tokens × scale) | 4.10 | **5.59** (**+36.4%**) |
-| Verdict breakdown | — | **`ACGC_WIN`** = **6**, `TIE` = **2**, `LOSS` = **0** |
-| Large quality regressions (more than a 1.0 score drop vs baseline on the same pair) | — | **0** |
+| Strategy | Avg quality (/5.0) | Avg prompt tokens | Avg IPT | Token reduction vs ref | Quality Δ vs ref |
+|---|---:|---:|---:|---:|---:|
+| `naive_full_history` (ref) | 5.00 | 2738 | 4.59 | 0.0% | +0.00 |
+| `sliding_window` | 3.25 | 2733 | 4.25 | 0.2% | **−1.75** |
+| `acgc` | **5.00** | **2082** | **5.05** | **24.0%** | **+0.00** |
 
-Interpretation (harness semantics): **`ACGC_WIN`** = strictly better IPT on that pair **without** a quality regression relative to baseline; probes that still tie on quality remain **`TIE`**.
+Candidate-vs-reference verdicts across 24 pairs: **`ACGC_WIN` = 12, `TIE` = 8, `ACGC_LOSS` = 4** (all four losses are `sliding_window` on the deep-history scenario; **ACGC has zero regressions**).
 
-#### Per-scenario highlights
+Interpretation (harness semantics): **`ACGC_WIN`** = strictly better IPT on that pair **without** a quality regression relative to the reference; probes that tie on quality with no token win remain **`TIE`**. **`acgc` matches the reference's perfect quality at 24% fewer tokens and the best IPT, while `sliding_window` — a pure recency heuristic — saves no tokens and collapses in quality once history exceeds the budget.**
 
-| Scenario / probe | Scoring | Quality (B / A) | Prompt tokens (B / A) | Token savings | Verdict |
+#### Two regimes
+
+**Regime 1 — history fits the budget (the six small scenarios).** No strategy has to truncate, so `sliding_window` sees the same full history as the reference (**identical prompts → `TIE`, 0% savings**), while `acgc` still compresses for a free discount at equal quality:
+
+| Scenario / probe | Scoring | Quality (ref / acgc) | Prompt tokens (ref / acgc) | Token savings | Verdict (acgc) |
 |---|---|---:|---:|---:|---|
-| `long_range_recall_1` / `p1`–`p3` | Probe | 5.0 / 5.0 | ~1125 / ~978 avg | ~**13.1%** each | **`ACGC_WIN`** (×3) |
-| `topic_switch_return_1` / `p1` | Probe | 5.0 / 5.0 | 804 / **724** | **10.0%** | **`ACGC_WIN`** |
-| `contradiction_1` / `p1` | Judge | 5.0 / 5.0 | 993 / **878** | **11.6%** | **`ACGC_WIN`** |
-| `recent_recall_1` / `p1` | Probe | 2.5 / **5.0** | 305 / **298** | **2.3%** | **`ACGC_WIN`** |
-| `constraint_adherence_1` / `p1` | Judge | 0 / 0 | 864 / **761** | **11.9%** | **`TIE`** |
-| `multi_hop_synth_1` / `p1` | Judge | 0 / 0 | 1143 / **1000** | **12.5%** | **`TIE`** |
+| `recent_recall_1` / `p1` | Probe | 5.0 / 5.0 | 307 / **298** | **2.9%** | **`ACGC_WIN`** |
+| `long_range_recall_1` / `p1`–`p3` | Probe | 5.0 / 5.0 | ~1092 / ~**977** | ~**10.5%** each | **`ACGC_WIN`** (×3) |
+| `constraint_adherence_1` / `p1` | Judge | 5.0 / 5.0 | 842 / **761** | **9.6%** | **`ACGC_WIN`** |
+| `topic_switch_return_1` / `p1` | Probe | 5.0 / 5.0 | 787 / **724** | **8.0%** | **`ACGC_WIN`** |
+| `contradiction_1` / `p1` | Judge | 5.0 / 5.0 | 969 / **878** | **9.4%** | **`ACGC_WIN`** |
+| `multi_hop_synth_1` / `p1` | Judge | 5.0 / 5.0 | 1111 / **1000** | **10.0%** | **`ACGC_WIN`** |
 
-The two **`TIE`** rows scored **0 / 0** because both pipelines returned **empty assistant text** for that probe (typically the model exhausting its completion budget before emitting visible tokens). They still show material **prompt-token savings** for ACGC. The **`recent_recall_1`** baseline quality **2.5** reflects asymmetric judge/stringency noise on one run—the ACGC branch matched all expected needles with a shorter prompt.
+**Regime 2 — history exceeds the budget (`deep_history_recall_1`, ~13.3k raw tokens, >2× the 6000-token budget).** Four decisions stated up front are buried under ~13k tokens of filler. Now the budget bites and the strategies diverge hard:
 
-Artifacts for this snapshot: regenerate with the command above, or inspect **`eval/results/report.md`** + **`eval/results/results.json`** after a local run.
+| Probe | Quality (ref / cand) | Prompt tokens (ref / cand) | Token savings | Verdict |
+|---|---:|---:|---:|---|
+| `deep_history_recall_1` / `p1`–`p4` · **acgc** | 5.0 / **5.0** | ~6392 / **~4597** | ~**28%** each | **`ACGC_WIN`** (×4) |
+| `deep_history_recall_1` / `p1`–`p4` · **sliding_window** | 5.0 / **0.0** | ~6392 / ~6378 | ~0.2% | **`ACGC_LOSS`** (×4) |
+
+- **`naive_full_history`** fills the budget oldest-first, so the early decisions stay in-window → recalls all four (5.0), but burns the full ~6,400-token budget.
+- **`sliding_window`** fills newest-first, so the early decisions fall off the window entirely → **0.0 on every probe** at the same token cost — the silent "lost the old decision" failure mode.
+- **`acgc`** retention-scores + compresses, keeping the four decisions at **~28% lower token cost** with full quality.
+
+#### On the raised answer cap
+
+Two reasoning-heavy probes (`constraint_adherence_1`, `multi_hop_synth_1`) previously exhausted the old hardcoded 2,500-token completion cap on hidden reasoning and returned **empty text scored 0**. With the new **`-max-tokens`** flag (default **6000**, raised to **10000** for this run to give the compressed-context `multi_hop` probe enough room), **all previously-empty probes now produce non-empty scored answers** — which is why the reference and `acgc` both reach a clean 5.00 aggregate.
+
+Artifacts for this snapshot: regenerate with the command above (add `-max-tokens 10000` for the reasoning-heavy probes), or inspect **`eval/results/report.md`** + **`eval/results/results.json`**.
 
 ---
 
