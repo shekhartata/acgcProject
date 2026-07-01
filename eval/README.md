@@ -35,6 +35,20 @@ make eval-strategies
 
 The default (`make eval`) compares `naive_full_history,acgc`.
 
+### Key flags
+
+| Flag | Default | Purpose |
+|---|---|---|
+| `-strategies` | `naive_full_history,acgc` | Comma-separated strategies to compare; the first is the reference. |
+| `-acgc-budget` | `6000` | Context token budget shared by every strategy — how much history each one may include. |
+| `-max-tokens` | `6000` | Max completion tokens for probe answers. Reasoning models (GPT-5/o1/o3) spend part of this on hidden reasoning, so too small a cap yields empty responses; raise it if answers come back blank. |
+
+```bash
+# Exercise budget-driven divergence: a dataset larger than the budget, roomy answer cap
+go run ./eval -v -strategies "naive_full_history,sliding_window,acgc" \
+  -scenarios deep_history_recall_1 -acgc-budget 6000 -max-tokens 6000
+```
+
 ## Accurate token counting
 
 Token accounting uses a real, model-aware BPE tokenizer (`tiktoken-go`,
@@ -85,6 +99,7 @@ Output:
 | `topic_switch_return_1` | topic_switch | Topic A, hard pivot to topic B, then callback to A's specific decision |
 | `contradiction_1` | contradiction | Decision X then explicit reversal to Y — latest must win |
 | `multi_hop_synth_1` | multi_hop | Three facts spread out; probe requires synthesizing all three |
+| `deep_history_recall_1` | deep_history | Four decisions up front, then ~85 large filler Q/A pairs (~13-15k raw tokens, >2x the default budget). Purpose-built to exceed the token budget so `naive_full_history` (keeps oldest), `sliding_window` (keeps newest, drops the decisions), and `acgc` (compresses, keeps the decisions cheaply) visibly diverge on tokens and recall. |
 
 ## Verdicts
 

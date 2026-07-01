@@ -34,6 +34,8 @@ func main() {
 		semantic      = flag.Bool("semantic", false, "enable HNSW semantic scoring in the ACGC pipeline (requires embedder API key)")
 		strategiesArg = flag.String("strategies", "naive_full_history,acgc",
 			"comma-separated context strategies to compare (naive_full_history, sliding_window, acgc); the first is the reference")
+		maxTokens = flag.Int("max-tokens", 6000,
+			"max completion tokens for probe answers (reasoning models spend part of this on hidden reasoning)")
 	)
 	flag.Parse()
 
@@ -52,11 +54,12 @@ func main() {
 		APIKey:      cfg.DefaultLLMAPIKey,
 		Model:       cfg.DefaultLLMModel,
 		Temperature: 0,
-		// Bumped from 800 → 2500. GPT-5 / o1 / o3 are reasoning models that
-		// consume part of MaxTokens for invisible reasoning. 800 was causing
-		// empty responses (reasoning overflow). 2500 leaves room for both
-		// reasoning and a substantive answer.
-		MaxTokens: 2500,
+		// Configurable via -max-tokens (default 6000). GPT-5 / o1 / o3 are
+		// reasoning models that consume part of MaxTokens for invisible
+		// reasoning, so too small a cap yields empty responses (reasoning
+		// overflow). The default leaves ample room for both reasoning and a
+		// substantive answer.
+		MaxTokens: *maxTokens,
 	}
 
 	acgcCfg := harness.DefaultACGCConfig()
@@ -121,6 +124,7 @@ func main() {
 	fmt.Printf("\n  Model: %s\n", llmCfg.Model)
 	fmt.Printf("  Tokenizer: %s\n", counter.Name())
 	fmt.Printf("  Strategies: %s (reference: %s)\n", strategyList(strategyKinds), reference)
+	fmt.Printf("  Budget: %d ctx tokens | answer cap: %d tokens\n", acgcCfg.TokenBudget, llmCfg.MaxTokens)
 	fmt.Printf("  Scenarios: %d\n", len(scenarios))
 	fmt.Printf("  Mode: %s\n", modeLabel(*cacheOnly, *useJudge))
 	if acgcCfg.Embedder != nil {
