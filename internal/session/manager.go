@@ -14,6 +14,7 @@ import (
 	"github.com/chandrashekhartata/acgc/internal/scorer"
 	"github.com/chandrashekhartata/acgc/internal/statetree"
 	"github.com/chandrashekhartata/acgc/internal/store"
+	"github.com/chandrashekhartata/acgc/internal/tokenizer"
 	"github.com/chandrashekhartata/acgc/internal/vectorindex"
 )
 
@@ -39,6 +40,7 @@ type Manager struct {
 	scorer         *scorer.Scorer
 	gc             *gc.GarbageCollector
 	compilerBudget int
+	tokenCounter   tokenizer.TokenCounter
 	channelBuffer  int
 	idleTimeout    time.Duration
 	snapshotEvery  time.Duration
@@ -53,10 +55,13 @@ type Manager struct {
 }
 
 type ManagerConfig struct {
-	Store          *store.MongoStore
-	Scorer         *scorer.Scorer
-	GC             *gc.GarbageCollector
-	TokenBudget    int
+	Store       *store.MongoStore
+	Scorer      *scorer.Scorer
+	GC          *gc.GarbageCollector
+	TokenBudget int
+	// TokenCounter is used for prompt token accounting. When nil, the
+	// process-wide default (real model-aware tokenizer) is used.
+	TokenCounter   tokenizer.TokenCounter
 	ChannelBuffer  int
 	IdleTimeoutS   int
 	SnapshotEveryS int
@@ -81,12 +86,17 @@ func NewManager(cfg ManagerConfig) *Manager {
 	if archK <= 0 {
 		archK = 12
 	}
+	tc := cfg.TokenCounter
+	if tc == nil {
+		tc = tokenizer.Default()
+	}
 	return &Manager{
 		sessions:         make(map[string]*SessionState),
 		store:            cfg.Store,
 		scorer:           cfg.Scorer,
 		gc:               cfg.GC,
 		compilerBudget:   cfg.TokenBudget,
+		tokenCounter:     tc,
 		channelBuffer:    cfg.ChannelBuffer,
 		idleTimeout:      time.Duration(cfg.IdleTimeoutS) * time.Second,
 		snapshotEvery:    time.Duration(cfg.SnapshotEveryS) * time.Second,
@@ -205,14 +215,14 @@ func (m *Manager) CompilePrompt(sessionID, taskID, userMessage, systemPrompt str
 			CurrentUserMessage: userMessage,
 			SystemPrompt:       systemPrompt,
 			FinalPrompt:        "",
-			OriginalTokenCount: estimateTokens(systemPrompt) + estimateTokens(userMessage),
-			CompiledTokenCount: estimateTokens(systemPrompt) + estimateTokens(userMessage),
+			OriginalTokenCount: m.tokenCounter.Count(systemPrompt) + m.tokenCounter.Count(userMessage),
+			CompiledTokenCount: m.tokenCounter.Count(systemPrompt) + m.tokenCounter.Count(userMessage),
 			CreatedAt:          time.Now(),
 		}
 	}
 
 	activeNodes := state.Tree.GetActiveNodes()
-	comp := compiler.NewCompiler(m.compilerBudget)
+	comp := compiler.NewCompilerWithCounter(m.compilerBudget, m.tokenCounter)
 
 	// Heuristic-only fast path: no embedder, no index, or no user message.
 	if !m.semanticEnabled() || state.ActiveIndex == nil || state.ArchiveIndex == nil || userMessage == "" {
@@ -264,8 +274,8 @@ func (m *Manager) compilePromptMeasured(sessionID, taskID, userMessage, systemPr
 			CurrentUserMessage: userMessage,
 			SystemPrompt:       systemPrompt,
 			FinalPrompt:        "",
-			OriginalTokenCount: estimateTokens(systemPrompt) + estimateTokens(userMessage),
-			CompiledTokenCount: estimateTokens(systemPrompt) + estimateTokens(userMessage),
+			OriginalTokenCount: m.tokenCounter.Count(systemPrompt) + m.tokenCounter.Count(userMessage),
+			CompiledTokenCount: m.tokenCounter.Count(systemPrompt) + m.tokenCounter.Count(userMessage),
 			CreatedAt:          time.Now(),
 		}
 	}
@@ -273,7 +283,7 @@ func (m *Manager) compilePromptMeasured(sessionID, taskID, userMessage, systemPr
 	bd := &domain.CompileLatencyBreakdown{}
 
 	activeNodes := state.Tree.GetActiveNodes()
-	comp := compiler.NewCompiler(m.compilerBudget)
+	comp := compiler.NewCompilerWithCounter(m.compilerBudget, m.tokenCounter)
 
 	if !m.semanticEnabled() || state.ActiveIndex == nil || state.ArchiveIndex == nil || userMessage == "" {
 		tAsm := time.Now()
@@ -584,10 +594,6 @@ func reconcileSemanticIndices(state *SessionState, tree *statetree.Tree, preActi
 		}
 		state.ActiveIndex.Delete(id)
 	}
-}
-
-func estimateTokens(s string) int {
-	return len(s) / 4
 }
 
 // payloadForEmbedding picks the best text to send to the embedding API for a

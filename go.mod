@@ -3,6 +3,9 @@ module github.com/chandrashekhartata/acgc
 go 1.25.0
 
 require (
+	github.com/coder/hnsw v0.6.1
+	github.com/pkoukk/tiktoken-go v0.1.8
+	github.com/pkoukk/tiktoken-go-loader v0.0.2
 	go.mongodb.org/mongo-driver/v2 v2.6.0
 	google.golang.org/grpc v1.81.0
 	google.golang.org/protobuf v1.36.11
@@ -10,8 +13,9 @@ require (
 
 require (
 	github.com/chewxy/math32 v1.10.1 // indirect
-	github.com/coder/hnsw v0.6.1 // indirect
+	github.com/dlclark/regexp2 v1.10.0 // indirect
 	github.com/google/renameio v1.0.1 // indirect
+	github.com/google/uuid v1.6.0 // indirect
 	github.com/klauspost/compress v1.17.6 // indirect
 	github.com/viterin/partial v1.1.0 // indirect
 	github.com/viterin/vek v0.4.2 // indirect

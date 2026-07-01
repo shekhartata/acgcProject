@@ -2,7 +2,7 @@ PROTO_DIR := proto
 API_DIR := api/proto
 BINARY := acgc
 
-.PHONY: proto build run test clean tidy lint mongo mongo-down mongo-logs mongo-shell stresstest eval eval-cached eval-judge eval-semantic eval-semantic-judge stresstest-semantic latency-bench
+.PHONY: proto build run test clean tidy lint mongo mongo-down mongo-logs mongo-shell stresstest eval eval-cached eval-judge eval-strategies eval-semantic eval-semantic-judge stresstest-semantic latency-bench
 
 # --- Build ---
 
@@ -72,6 +72,11 @@ eval:
 # Live run with LLM-as-judge enabled for open-ended scenarios. Spends more tokens.
 eval-judge:
 	go run ./eval -v -judge
+
+# Compare all three context strategies (naive_full_history is the reference).
+# Uses the model-aware tokenizer for token accounting.
+eval-strategies:
+	go run ./eval -v -strategies "naive_full_history,sliding_window,acgc"
 
 # Replay scored results from cache only — does NOT call the API. Free.
 eval-cached:

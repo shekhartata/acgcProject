@@ -11,6 +11,7 @@ import (
 	"github.com/chandrashekhartata/acgc/internal/gc"
 	"github.com/chandrashekhartata/acgc/internal/llm"
 	"github.com/chandrashekhartata/acgc/internal/session"
+	"github.com/chandrashekhartata/acgc/internal/tokenizer"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -49,7 +50,7 @@ func (s *Server) Run(ctx context.Context, req *pb.RunRequest) (*pb.RunResponse, 
 		TaskID:     taskID,
 		EventType:  domain.EventUserPrompt,
 		Payload:    req.UserMessage,
-		TokenCount: len(req.UserMessage) / 4,
+		TokenCount: tokenizer.Default().Count(req.UserMessage),
 		CreatedAt:  time.Now(),
 	}
 	s.sessions.EnqueueEvent(sessionID, userEvent)
@@ -174,7 +175,7 @@ func (s *Server) CaptureEvent(ctx context.Context, req *pb.CaptureEventRequest) 
 		TaskID:     taskID,
 		EventType:  domain.EventType(req.EventType),
 		Payload:    req.Payload,
-		TokenCount: len(req.Payload) / 4,
+		TokenCount: tokenizer.Default().Count(req.Payload),
 		Metadata:   req.Metadata,
 		CreatedAt:  time.Now(),
 	}

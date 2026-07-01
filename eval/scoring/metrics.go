@@ -6,49 +6,53 @@ import "github.com/chandrashekhartata/acgc/eval/harness"
 type Verdict string
 
 const (
-	VerdictACGCWin       Verdict = "ACGC_WIN"        // ACGC produced equal/better quality at lower tokens
-	VerdictACGCWinStar   Verdict = "ACGC_WIN_STAR"   // IPT wins but raw quality regressed (motivates semantic search)
-	VerdictTie           Verdict = "TIE"             // ~equal on both axes
-	VerdictACGCLoss      Verdict = "ACGC_LOSS"       // quality dropped AND tokens didn't fall enough to compensate
-	VerdictBaselineWin   Verdict = "BASELINE_WIN"    // baseline strictly better
+	VerdictACGCWin     Verdict = "ACGC_WIN"      // ACGC produced equal/better quality at lower tokens
+	VerdictACGCWinStar Verdict = "ACGC_WIN_STAR" // IPT wins but raw quality regressed (motivates semantic search)
+	VerdictTie         Verdict = "TIE"           // ~equal on both axes
+	VerdictACGCLoss    Verdict = "ACGC_LOSS"     // quality dropped AND tokens didn't fall enough to compensate
+	VerdictBaselineWin Verdict = "BASELINE_WIN"  // baseline strictly better
 )
 
-// PairResult is the fully-evaluated outcome for a single probe.
+// PairResult is the fully-evaluated outcome for a single probe: a candidate
+// strategy compared against the reference strategy. The *Baseline fields hold
+// the reference-strategy values; the *ACGC fields hold the candidate values.
 type PairResult struct {
-	ScenarioID       string  `json:"scenario_id"`
-	ProbeID          string  `json:"probe_id"`
-	ScoreBaseline    float64 `json:"score_baseline"`
-	ScoreACGC        float64 `json:"score_acgc"`
-	TokensBaseline   int     `json:"tokens_baseline"`
-	TokensACGC       int     `json:"tokens_acgc"`
-	IPTBaseline      float64 `json:"ipt_baseline"`
-	IPTACGC          float64 `json:"ipt_acgc"`
-	IPTDelta         float64 `json:"ipt_delta"`        // ACGC - baseline (positive = ACGC better)
-	IPTDeltaPct      float64 `json:"ipt_delta_pct"`    // (ACGC - baseline) / baseline * 100
-	QualityDelta     float64 `json:"quality_delta"`    // ACGC - baseline (positive = ACGC better)
-	TokenReductionPct float64 `json:"token_reduction_pct"`
-	Verdict          Verdict `json:"verdict"`
-	ScoringMethod    string  `json:"scoring_method"`   // "probe" or "judge"
-	DetailBaseline   string  `json:"detail_baseline"`
-	DetailACGC       string  `json:"detail_acgc"`
+	ScenarioID        string               `json:"scenario_id"`
+	ProbeID           string               `json:"probe_id"`
+	Strategy          harness.PipelineKind `json:"strategy"`           // candidate strategy
+	Reference         harness.PipelineKind `json:"reference_strategy"` // reference strategy
+	ScoreBaseline     float64              `json:"score_baseline"`
+	ScoreACGC         float64              `json:"score_acgc"`
+	TokensBaseline    int                  `json:"tokens_baseline"`
+	TokensACGC        int                  `json:"tokens_acgc"`
+	IPTBaseline       float64              `json:"ipt_baseline"`
+	IPTACGC           float64              `json:"ipt_acgc"`
+	IPTDelta          float64              `json:"ipt_delta"`     // ACGC - baseline (positive = ACGC better)
+	IPTDeltaPct       float64              `json:"ipt_delta_pct"` // (ACGC - baseline) / baseline * 100
+	QualityDelta      float64              `json:"quality_delta"` // ACGC - baseline (positive = ACGC better)
+	TokenReductionPct float64              `json:"token_reduction_pct"`
+	Verdict           Verdict              `json:"verdict"`
+	ScoringMethod     string               `json:"scoring_method"` // "probe" or "judge"
+	DetailBaseline    string               `json:"detail_baseline"`
+	DetailACGC        string               `json:"detail_acgc"`
 }
 
 // Aggregate is the summary across all probes in the eval run.
 type Aggregate struct {
-	TotalPairs        int     `json:"total_pairs"`
-	ACGCWins          int     `json:"acgc_wins"`
-	ACGCWinsStar      int     `json:"acgc_wins_star"`
-	Ties              int     `json:"ties"`
-	ACGCLosses        int     `json:"acgc_losses"`
-	BaselineWins      int     `json:"baseline_wins"`
-	AvgQualityBaseline float64 `json:"avg_quality_baseline"`
-	AvgQualityACGC    float64 `json:"avg_quality_acgc"`
-	AvgQualityDelta   float64 `json:"avg_quality_delta"`
+	TotalPairs           int     `json:"total_pairs"`
+	ACGCWins             int     `json:"acgc_wins"`
+	ACGCWinsStar         int     `json:"acgc_wins_star"`
+	Ties                 int     `json:"ties"`
+	ACGCLosses           int     `json:"acgc_losses"`
+	BaselineWins         int     `json:"baseline_wins"`
+	AvgQualityBaseline   float64 `json:"avg_quality_baseline"`
+	AvgQualityACGC       float64 `json:"avg_quality_acgc"`
+	AvgQualityDelta      float64 `json:"avg_quality_delta"`
 	AvgTokenReductionPct float64 `json:"avg_token_reduction_pct"`
-	AvgIPTBaseline    float64 `json:"avg_ipt_baseline"`
-	AvgIPTACGC        float64 `json:"avg_ipt_acgc"`
-	AvgIPTDeltaPct    float64 `json:"avg_ipt_delta_pct"`
-	RegressionCount   int     `json:"regression_count"` // pairs where quality dropped by > 1.0
+	AvgIPTBaseline       float64 `json:"avg_ipt_baseline"`
+	AvgIPTACGC           float64 `json:"avg_ipt_acgc"`
+	AvgIPTDeltaPct       float64 `json:"avg_ipt_delta_pct"`
+	RegressionCount      int     `json:"regression_count"` // pairs where quality dropped by > 1.0
 }
 
 // ComputeIPT applies the intelligence-per-token formula. We use score / (tokens/1000)
@@ -81,10 +85,11 @@ func ClassifyVerdict(qualityBaseline, qualityACGC, iptBaseline, iptACGC float64)
 	}
 }
 
-// BuildPair produces a PairResult from the raw baseline/acgc probe results
-// plus their quality scores.
+// BuildPair produces a PairResult comparing a candidate strategy against the
+// reference strategy for a single probe.
 func BuildPair(
 	scenarioID, probeID string,
+	reference, candidate harness.PipelineKind,
 	baseline harness.ProbeResult, acgc harness.ProbeResult,
 	scoreBaseline, scoreACGC Score,
 ) PairResult {
@@ -94,6 +99,8 @@ func BuildPair(
 	pr := PairResult{
 		ScenarioID:     scenarioID,
 		ProbeID:        probeID,
+		Strategy:       candidate,
+		Reference:      reference,
 		ScoreBaseline:  scoreBaseline.Value,
 		ScoreACGC:      scoreACGC.Value,
 		TokensBaseline: baseline.PromptTokens,

@@ -7,15 +7,37 @@ import (
 	"time"
 
 	"github.com/chandrashekhartata/acgc/internal/domain"
+	"github.com/chandrashekhartata/acgc/internal/tokenizer"
 	"github.com/chandrashekhartata/acgc/internal/vectorindex"
 )
 
 type Compiler struct {
-	tokenBudget int
+	tokenBudget  int
+	tokenCounter tokenizer.TokenCounter
 }
 
+// NewCompiler builds a compiler with the given token budget. It uses the
+// process-wide default token counter, preserving the original single-argument
+// signature for existing callers (PRD backward-compatibility requirement).
 func NewCompiler(tokenBudget int) *Compiler {
-	return &Compiler{tokenBudget: tokenBudget}
+	return NewCompilerWithCounter(tokenBudget, tokenizer.Default())
+}
+
+// NewCompilerWithCounter builds a compiler with an explicit token counter.
+// Prefer this when the caller knows the target model so token accounting is
+// accurate. A nil counter falls back to the process-wide default.
+func NewCompilerWithCounter(tokenBudget int, counter tokenizer.TokenCounter) *Compiler {
+	if counter == nil {
+		counter = tokenizer.Default()
+	}
+	return &Compiler{tokenBudget: tokenBudget, tokenCounter: counter}
+}
+
+func (c *Compiler) count(s string) int {
+	if c.tokenCounter == nil {
+		return len(s) / 4
+	}
+	return c.tokenCounter.Count(s)
 }
 
 // Compile builds an optimized prompt from the state tree nodes.
@@ -90,7 +112,7 @@ func (c *Compiler) compile(
 		CreatedAt:          time.Now(),
 	}
 
-	originalTokens := estimateTokens(systemPrompt) + estimateTokens(userMessage)
+	originalTokens := c.count(systemPrompt) + c.count(userMessage)
 	for _, n := range nodes {
 		originalTokens += n.TokenCount
 	}
@@ -139,10 +161,10 @@ func (c *Compiler) compile(
 	var sections []string
 	tokensUsed := 0
 	if systemPrompt != "" {
-		tokensUsed += estimateTokens(systemPrompt)
+		tokensUsed += c.count(systemPrompt)
 	}
 	if userMessage != "" {
-		tokensUsed += estimateTokens(userMessage)
+		tokensUsed += c.count(userMessage)
 	}
 
 	// Record the top goal title for downstream consumers (telemetry, audit),
@@ -165,7 +187,7 @@ func (c *Compiler) compile(
 			continue
 		}
 
-		selected, excluded, used := selectWithinBudget(bucket, remaining)
+		selected, excluded, used := c.selectWithinBudget(bucket, remaining)
 		if len(selected) > 0 {
 			text := formatSection(bucketLabels[i], selected)
 			sections = append(sections, text)
@@ -200,23 +222,23 @@ func (c *Compiler) compile(
 	cp.FinalPrompt = strings.Join(sections, "\n\n---\n\n")
 	// CompiledTokenCount mirrors the wire: system + context body + user probe,
 	// all as separate chat messages.
-	cp.CompiledTokenCount = estimateTokens(systemPrompt) + estimateTokens(cp.FinalPrompt) + estimateTokens(userMessage)
+	cp.CompiledTokenCount = c.count(systemPrompt) + c.count(cp.FinalPrompt) + c.count(userMessage)
 
 	return cp
 }
 
-func selectWithinBudget(nodes []*domain.StateNode, budget int) (selected, excluded []*domain.StateNode, tokensUsed int) {
+func (c *Compiler) selectWithinBudget(nodes []*domain.StateNode, budget int) (selected, excluded []*domain.StateNode, tokensUsed int) {
 	for _, n := range nodes {
 		cost := n.TokenCount
 		if cost == 0 {
-			cost = estimateTokens(n.Summary)
+			cost = c.count(n.Summary)
 		}
 		// Only compressed/summary nodes will render facts:/decisions: sub-lines
 		// (active nodes already include that text in their Summary). Cost the
 		// extra tokens here so the budget gate matches what formatSection emits.
 		if emitsFactsLine(n) {
-			cost += estimateTokens(strings.Join(n.Facts, "; "))
-			cost += estimateTokens(strings.Join(n.Decisions, "; "))
+			cost += c.count(strings.Join(n.Facts, "; "))
+			cost += c.count(strings.Join(n.Decisions, "; "))
 		}
 		if tokensUsed+cost <= budget {
 			selected = append(selected, n)
@@ -276,9 +298,4 @@ func sortByEffective(nodes []*domain.StateNode, effective map[string]float64) {
 		}
 		return ai > aj
 	})
-}
-
-func estimateTokens(s string) int {
-	// ~4 chars per token is a reasonable approximation
-	return len(s) / 4
 }

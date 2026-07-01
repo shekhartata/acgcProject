@@ -218,7 +218,7 @@ The compiler (`internal/compiler`) builds **`FinalPrompt`**: Markdown sections (
 
 **Wire format (`internal/gateway`, `eval/harness`):** chat messages are **`[system, user(context = FinalPrompt), user(current message)]`** — the system string is **not** duplicated inside `FinalPrompt`; `CompiledTokenCount` accounts for **system + FinalPrompt + current user text** for apples-to-apples stats.
 
-**Token estimation:** `len(string) / 4` (~4 chars per token) for budgeting and stats.
+**Token counting:** a real, model-aware BPE tokenizer (`internal/tokenizer`, backed by `tiktoken-go`) is used for budgeting and stats. The encoding is resolved from the configured model (e.g. `o200k_base` for GPT-4o/GPT-5, `cl100k_base` for GPT-4). If the encoding can't be loaded it falls back to the historical `len(string) / 4` (~4 chars per token) approximation. `NewCompiler(budget)` remains supported (it uses the process-wide default counter); `NewCompilerWithCounter(budget, counter)` injects an explicit one.
 
 ---
 
@@ -561,9 +561,15 @@ Artifacts: `stresstest/results.json` (export from the heuristic run above).
 
 ## Quality Evaluation (LLM harness)
 
-The **`eval/`** package runs end-to-end comparisons between a **naive baseline** (full chat history + probe as the last user message) and the **ACGC pipeline** (in-process replay with GC/compiler; optional **semantic retrieval** active + archive HNSW). It records **prompt token counts**, **latency**, **probe-based** factual checks (`MatchContains*` on expected needles), **LLM-as-judge** scores for open-ended probes, **intelligence-per-token** (IPT = quality ÷ prompt tokens), and aggregates a win/tie verdict per pair.
+The **`eval/`** package runs end-to-end comparisons across a configurable set of **context strategies** selected with `-strategies` (comma-separated, first = reference):
 
-Requires **`ACGC_LLM_API_KEY`** (and embeddings when using `-semantic`; see `eval/README.md`). Reports land in **`eval/results/`** (`report.md`, `results.json`).
+- **`naive_full_history`** — all history up to the token budget (the default reference; "no context management").
+- **`sliding_window`** — most-recent context only, filling the budget newest-first.
+- **`acgc`** — full ACGC replay with GC/compiler and optional **semantic retrieval** (active + archive HNSW).
+
+Every strategy shares the same system prompt, budget, LLM, tokenizer, scoring, and cache, so results are directly comparable. It records **prompt token counts** (via a real model-aware BPE tokenizer, `internal/tokenizer`), **latency**, **probe-based** factual checks (`MatchContains*` on expected needles), **LLM-as-judge** scores for open-ended probes, **intelligence-per-token** (IPT = quality ÷ prompt tokens), and aggregates candidate-vs-reference verdicts plus a side-by-side per-strategy table.
+
+Requires **`ACGC_LLM_API_KEY`** (and embeddings when using `-semantic`; see `eval/README.md`). Reports land in **`eval/results/`** (`report.md`, `results.json`). Run all three strategies with `make eval-strategies` or `go run ./eval -strategies "naive_full_history,sliding_window,acgc" -v`.
 
 ### How to reproduce
 

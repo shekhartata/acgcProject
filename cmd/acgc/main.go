@@ -18,6 +18,7 @@ import (
 	"github.com/chandrashekhartata/acgc/internal/scorer"
 	"github.com/chandrashekhartata/acgc/internal/session"
 	"github.com/chandrashekhartata/acgc/internal/store"
+	"github.com/chandrashekhartata/acgc/internal/tokenizer"
 	"github.com/chandrashekhartata/acgc/internal/vectorindex"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/reflection"
@@ -25,6 +26,11 @@ import (
 
 func main() {
 	cfg := config.Load()
+
+	// Real, model-aware token counting for prompt budgeting and metrics.
+	tokenCounter := tokenizer.New(cfg.DefaultLLMModel)
+	tokenizer.SetDefault(tokenCounter)
+	log.Printf("tokenizer: %s (model %q)", tokenCounter.Name(), cfg.DefaultLLMModel)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -114,6 +120,7 @@ func main() {
 		Scorer:               sc,
 		GC:                   collector,
 		TokenBudget:          cfg.DefaultTokenBudget,
+		TokenCounter:         tokenCounter,
 		ChannelBuffer:        cfg.SessionChannelBuffer,
 		IdleTimeoutS:         cfg.SessionIdleTimeoutS,
 		SnapshotEveryS:       cfg.SnapshotIntervalS,

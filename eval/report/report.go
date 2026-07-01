@@ -15,13 +15,23 @@ import (
 
 // Bundle is everything the report writer needs to render the final output.
 type Bundle struct {
-	GeneratedAt    time.Time                              `json:"generated_at"`
-	Model          string                                 `json:"model"`
-	TokensSpent    int                                    `json:"tokens_spent"`
-	Pairs          []scoring.PairResult                   `json:"pairs"`
-	Aggregate      scoring.Aggregate                      `json:"aggregate"`
-	BaselineByPair map[string]harness.ProbeResult         `json:"baseline_responses"`
-	ACGCByPair     map[string]harness.ProbeResult         `json:"acgc_responses"`
+	GeneratedAt time.Time              `json:"generated_at"`
+	Model       string                 `json:"model"`
+	Tokenizer   string                 `json:"tokenizer"`
+	TokensSpent int                    `json:"tokens_spent"`
+	Strategies  []harness.PipelineKind `json:"strategies"`
+	Reference   harness.PipelineKind   `json:"reference_strategy"`
+
+	StrategyAggregates []scoring.StrategyAggregate `json:"strategy_aggregates"`
+	StrategyMetrics    []scoring.StrategyMetric    `json:"strategy_metrics"`
+
+	// Pairs / Aggregate hold candidate-vs-reference verdicts (one candidate per
+	// pair). Retained so the win/loss framing continues to work.
+	Pairs     []scoring.PairResult `json:"pairs"`
+	Aggregate scoring.Aggregate    `json:"aggregate"`
+
+	// ResponsesByStrategy[strategy][scenario::probe] = probe result, for samples.
+	ResponsesByStrategy map[harness.PipelineKind]map[string]harness.ProbeResult `json:"responses_by_strategy"`
 }
 
 // WriteAll writes both a JSON dump and a human-readable markdown report.
@@ -46,45 +56,74 @@ func writeJSON(path string, b Bundle) error {
 func writeMarkdown(path string, b Bundle) error {
 	var sb strings.Builder
 
-	sb.WriteString("# ACGC Quality & Intelligence-Per-Token Evaluation\n\n")
+	sb.WriteString("# ACGC Context-Strategy Evaluation\n\n")
 	sb.WriteString(fmt.Sprintf("**Generated:** %s  \n", b.GeneratedAt.Format(time.RFC3339)))
 	sb.WriteString(fmt.Sprintf("**Model:** `%s`  \n", b.Model))
+	sb.WriteString(fmt.Sprintf("**Tokenizer:** `%s`  \n", b.Tokenizer))
+	sb.WriteString(fmt.Sprintf("**Reference strategy:** `%s`  \n", b.Reference))
+	sb.WriteString(fmt.Sprintf("**Strategies compared:** %s  \n", joinKinds(b.Strategies)))
 	sb.WriteString(fmt.Sprintf("**Live tokens spent this run:** %d  \n\n", b.TokensSpent))
 
-	sb.WriteString("## Aggregate\n\n")
-	writeAggregate(&sb, b.Aggregate)
+	sb.WriteString("## Strategy comparison (side by side)\n\n")
+	writeStrategyTable(&sb, b.StrategyAggregates)
+
+	sb.WriteString("\n## Candidate vs reference (verdicts)\n\n")
+	writeAggregate(&sb, b.Aggregate, b.Reference)
 
 	sb.WriteString("\n## Per-probe results\n\n")
 	writeTable(&sb, b.Pairs)
 
-	sb.WriteString("\n## Side-by-side response samples\n\n")
+	sb.WriteString("\n## Response samples\n\n")
 	writeSamples(&sb, b)
 
 	return os.WriteFile(path, []byte(sb.String()), 0o644)
 }
 
-func writeAggregate(sb *strings.Builder, a scoring.Aggregate) {
+func joinKinds(kinds []harness.PipelineKind) string {
+	parts := make([]string, len(kinds))
+	for i, k := range kinds {
+		parts[i] = "`" + string(k) + "`"
+	}
+	return strings.Join(parts, ", ")
+}
+
+func writeStrategyTable(sb *strings.Builder, aggs []scoring.StrategyAggregate) {
+	sb.WriteString("| Strategy | Probes | Avg Quality | Avg Prompt Tok | Avg Latency (ms) | Avg IPT | Tok Red% vs ref | Quality Δ vs ref | IPT Δ% vs ref |\n")
+	sb.WriteString("|---|---|---|---|---|---|---|---|---|\n")
+	for _, a := range aggs {
+		name := string(a.Strategy)
+		if a.IsReference {
+			name += " (ref)"
+		}
+		sb.WriteString(fmt.Sprintf("| `%s` | %d | %.2f | %.0f | %.0f | %.2f | %.1f%% | %+.2f | %+.1f%% |\n",
+			name, a.Probes, a.AvgQuality, a.AvgPromptTokens, a.AvgLatencyMs, a.AvgIPT,
+			a.TokenReductionPctVsRef, a.QualityDeltaVsRef, a.IPTDeltaPctVsRef))
+	}
+}
+
+func writeAggregate(sb *strings.Builder, a scoring.Aggregate, ref harness.PipelineKind) {
+	sb.WriteString(fmt.Sprintf("Reference: `%s`\n\n", ref))
 	sb.WriteString(fmt.Sprintf("- **Pairs evaluated:** %d\n", a.TotalPairs))
-	sb.WriteString(fmt.Sprintf("- **Avg quality (baseline):** %.2f / 5.0\n", a.AvgQualityBaseline))
-	sb.WriteString(fmt.Sprintf("- **Avg quality (ACGC):** %.2f / 5.0\n", a.AvgQualityACGC))
-	sb.WriteString(fmt.Sprintf("- **Avg quality delta:** %+.2f (ACGC - baseline)\n", a.AvgQualityDelta))
+	sb.WriteString(fmt.Sprintf("- **Avg quality (reference):** %.2f / 5.0\n", a.AvgQualityBaseline))
+	sb.WriteString(fmt.Sprintf("- **Avg quality (candidate):** %.2f / 5.0\n", a.AvgQualityACGC))
+	sb.WriteString(fmt.Sprintf("- **Avg quality delta:** %+.2f (candidate - reference)\n", a.AvgQualityDelta))
 	sb.WriteString(fmt.Sprintf("- **Avg token reduction:** %.1f%%\n", a.AvgTokenReductionPct))
-	sb.WriteString(fmt.Sprintf("- **Avg IPT (baseline):** %.2f\n", a.AvgIPTBaseline))
-	sb.WriteString(fmt.Sprintf("- **Avg IPT (ACGC):** %.2f\n", a.AvgIPTACGC))
+	sb.WriteString(fmt.Sprintf("- **Avg IPT (reference):** %.2f\n", a.AvgIPTBaseline))
+	sb.WriteString(fmt.Sprintf("- **Avg IPT (candidate):** %.2f\n", a.AvgIPTACGC))
 	sb.WriteString(fmt.Sprintf("- **Avg IPT delta:** %+.1f%%\n", a.AvgIPTDeltaPct))
 	sb.WriteString(fmt.Sprintf("- **Quality regressions (>1.0 drop):** %d\n\n", a.RegressionCount))
 
 	sb.WriteString("### Verdict breakdown\n\n")
 	sb.WriteString(fmt.Sprintf("- `ACGC_WIN` (better IPT, no quality loss): **%d**\n", a.ACGCWins))
-	sb.WriteString(fmt.Sprintf("- `ACGC_WIN_STAR` (better IPT, but quality dropped — motivates semantic search): **%d**\n", a.ACGCWinsStar))
+	sb.WriteString(fmt.Sprintf("- `ACGC_WIN_STAR` (better IPT, but quality dropped): **%d**\n", a.ACGCWinsStar))
 	sb.WriteString(fmt.Sprintf("- `TIE`: **%d**\n", a.Ties))
 	sb.WriteString(fmt.Sprintf("- `ACGC_LOSS`: **%d**\n", a.ACGCLosses))
-	sb.WriteString(fmt.Sprintf("- `BASELINE_WIN`: **%d**\n", a.BaselineWins))
+	sb.WriteString(fmt.Sprintf("- `BASELINE_WIN` (reference strictly better): **%d**\n", a.BaselineWins))
 }
 
 func writeTable(sb *strings.Builder, pairs []scoring.PairResult) {
-	sb.WriteString("| Scenario / Probe | Method | Quality (B / A) | Tokens (B / A) | Token Red% | IPT (B / A) | IPT Δ% | Verdict |\n")
-	sb.WriteString("|---|---|---|---|---|---|---|---|\n")
+	sb.WriteString("| Scenario / Probe | Candidate | Method | Quality (ref / cand) | Tokens (ref / cand) | Token Red% | IPT (ref / cand) | IPT Δ% | Verdict |\n")
+	sb.WriteString("|---|---|---|---|---|---|---|---|---|\n")
 
 	sorted := make([]scoring.PairResult, len(pairs))
 	copy(sorted, pairs)
@@ -92,12 +131,16 @@ func writeTable(sb *strings.Builder, pairs []scoring.PairResult) {
 		if sorted[i].ScenarioID != sorted[j].ScenarioID {
 			return sorted[i].ScenarioID < sorted[j].ScenarioID
 		}
-		return sorted[i].ProbeID < sorted[j].ProbeID
+		if sorted[i].ProbeID != sorted[j].ProbeID {
+			return sorted[i].ProbeID < sorted[j].ProbeID
+		}
+		return sorted[i].Strategy < sorted[j].Strategy
 	})
 
 	for _, p := range sorted {
-		sb.WriteString(fmt.Sprintf("| `%s` / `%s` | %s | %.1f / %.1f | %d / %d | %.1f%% | %.2f / %.2f | %+.1f%% | %s |\n",
+		sb.WriteString(fmt.Sprintf("| `%s` / `%s` | `%s` | %s | %.1f / %.1f | %d / %d | %.1f%% | %.2f / %.2f | %+.1f%% | %s |\n",
 			p.ScenarioID, p.ProbeID,
+			p.Strategy,
 			p.ScoringMethod,
 			p.ScoreBaseline, p.ScoreACGC,
 			p.TokensBaseline, p.TokensACGC,
@@ -110,8 +153,10 @@ func writeTable(sb *strings.Builder, pairs []scoring.PairResult) {
 }
 
 func writeSamples(sb *strings.Builder, b Bundle) {
-	keys := make([]string, 0, len(b.BaselineByPair))
-	for k := range b.BaselineByPair {
+	// Collect the set of pair keys from the reference strategy responses.
+	refResponses := b.ResponsesByStrategy[b.Reference]
+	keys := make([]string, 0, len(refResponses))
+	for k := range refResponses {
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
@@ -123,17 +168,23 @@ func writeSamples(sb *strings.Builder, b Bundle) {
 
 	for i := 0; i < max; i++ {
 		k := keys[i]
-		base := b.BaselineByPair[k]
-		acgc := b.ACGCByPair[k]
+		ref := refResponses[k]
 
 		sb.WriteString(fmt.Sprintf("### `%s`\n\n", k))
-		sb.WriteString(fmt.Sprintf("**Question:** %s\n\n", base.Question))
+		sb.WriteString(fmt.Sprintf("**Question:** %s\n\n", ref.Question))
 
-		sb.WriteString(fmt.Sprintf("**Baseline** (%d prompt tokens, %d ms):\n\n", base.PromptTokens, base.LatencyMs))
-		sb.WriteString("> " + indent(trunc(base.Response, 1200)) + "\n\n")
-
-		sb.WriteString(fmt.Sprintf("**ACGC** (%d prompt tokens, %d ms):\n\n", acgc.PromptTokens, acgc.LatencyMs))
-		sb.WriteString("> " + indent(trunc(acgc.Response, 1200)) + "\n\n")
+		for _, strat := range b.Strategies {
+			res, ok := b.ResponsesByStrategy[strat][k]
+			if !ok {
+				continue
+			}
+			label := string(strat)
+			if strat == b.Reference {
+				label += " (ref)"
+			}
+			sb.WriteString(fmt.Sprintf("**%s** (%d prompt tokens, %d ms):\n\n", label, res.PromptTokens, res.LatencyMs))
+			sb.WriteString("> " + indent(trunc(res.Response, 1200)) + "\n\n")
+		}
 		sb.WriteString("---\n\n")
 	}
 }

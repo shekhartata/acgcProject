@@ -21,32 +21,43 @@ type RunnerOptions struct {
 	Verbose   bool
 }
 
-// Runner executes scenarios through both pipelines, with caching, and
-// returns the full per-pipeline results.
+// Runner executes scenarios through an ordered set of strategy pipelines,
+// with caching, and returns the full per-strategy results.
 type Runner struct {
-	cache    *Cache
-	baseline Pipeline
-	acgc     Pipeline
-	opts     RunnerOptions
+	cache     *Cache
+	pipelines []Pipeline
+	opts      RunnerOptions
 
 	tokensSpent int
 }
 
-func NewRunner(cache *Cache, baseline, acgc Pipeline, opts RunnerOptions) *Runner {
-	return &Runner{cache: cache, baseline: baseline, acgc: acgc, opts: opts}
+// NewRunner builds a runner over an ordered list of pipelines. The order is
+// preserved in reporting; conventionally the reference strategy comes first.
+func NewRunner(cache *Cache, pipelines []Pipeline, opts RunnerOptions) *Runner {
+	return &Runner{cache: cache, pipelines: pipelines, opts: opts}
+}
+
+// Pipelines returns the pipeline kinds in run order.
+func (r *Runner) Pipelines() []PipelineKind {
+	kinds := make([]PipelineKind, len(r.pipelines))
+	for i, p := range r.pipelines {
+		kinds[i] = p.Kind()
+	}
+	return kinds
 }
 
 // TokensSpent reports tokens spent on live API calls (cached responses do
 // not count). Used for honest cost accounting.
 func (r *Runner) TokensSpent() int { return r.tokensSpent }
 
-// RunScenario evaluates one scenario through both pipelines. Each probe is
-// answered separately by both pipelines, sharing the same prior history.
-func (r *Runner) RunScenario(ctx context.Context, sc datasets.Scenario) (baseline, acgc ScenarioRun, err error) {
-	baseline.ScenarioID = sc.ID
-	baseline.Pipeline = PipelineBaseline
-	acgc.ScenarioID = sc.ID
-	acgc.Pipeline = PipelineACGC
+// RunScenario evaluates one scenario through every configured strategy. Each
+// probe is answered separately by every strategy, sharing the same prior
+// history. Results are keyed by strategy kind.
+func (r *Runner) RunScenario(ctx context.Context, sc datasets.Scenario) (map[PipelineKind]ScenarioRun, error) {
+	runs := make(map[PipelineKind]ScenarioRun, len(r.pipelines))
+	for _, p := range r.pipelines {
+		runs[p.Kind()] = ScenarioRun{ScenarioID: sc.ID, Pipeline: p.Kind()}
+	}
 
 	for _, probe := range sc.Probes {
 		// Slice history up to ProbeAt — probes are injected at known turn indices.
@@ -55,33 +66,36 @@ func (r *Runner) RunScenario(ctx context.Context, sc datasets.Scenario) (baselin
 			history = sc.Turns[:probe.ProbeAt]
 		}
 
-		baseResult, err := r.answer(ctx, r.baseline, sc.ID, history, probe)
-		if err != nil {
-			return baseline, acgc, fmt.Errorf("baseline probe %s: %w", probe.ID, err)
+		for _, p := range r.pipelines {
+			res, err := r.answer(ctx, p, sc.ID, history, probe)
+			if err != nil {
+				return runs, fmt.Errorf("%s probe %s: %w", p.Kind(), probe.ID, err)
+			}
+			run := runs[p.Kind()]
+			run.ProbeResults = append(run.ProbeResults, *res)
+			run.TotalPromptToks += res.PromptTokens
+			run.TotalOutputToks += res.OutputTokens
+			run.TotalLatencyMs += res.LatencyMs
+			runs[p.Kind()] = run
 		}
-		baseline.ProbeResults = append(baseline.ProbeResults, *baseResult)
-		baseline.TotalPromptToks += baseResult.PromptTokens
-		baseline.TotalOutputToks += baseResult.OutputTokens
-		baseline.TotalLatencyMs += baseResult.LatencyMs
-
-		acgcResult, err := r.answer(ctx, r.acgc, sc.ID, history, probe)
-		if err != nil {
-			return baseline, acgc, fmt.Errorf("acgc probe %s: %w", probe.ID, err)
-		}
-		acgc.ProbeResults = append(acgc.ProbeResults, *acgcResult)
-		acgc.TotalPromptToks += acgcResult.PromptTokens
-		acgc.TotalOutputToks += acgcResult.OutputTokens
-		acgc.TotalLatencyMs += acgcResult.LatencyMs
 
 		if r.opts.Verbose {
-			log.Printf("  [%s/%s] baseline=%d tok, acgc=%d tok (saved %d, %.1f%%)",
-				sc.ID, probe.ID,
-				baseResult.PromptTokens, acgcResult.PromptTokens,
-				baseResult.PromptTokens-acgcResult.PromptTokens,
-				pct(baseResult.PromptTokens-acgcResult.PromptTokens, baseResult.PromptTokens))
+			r.logProbe(sc.ID, probe.ID, runs)
 		}
 	}
-	return baseline, acgc, nil
+	return runs, nil
+}
+
+func (r *Runner) logProbe(scenarioID, probeID string, runs map[PipelineKind]ScenarioRun) {
+	for _, p := range r.pipelines {
+		run := runs[p.Kind()]
+		if len(run.ProbeResults) == 0 {
+			continue
+		}
+		last := run.ProbeResults[len(run.ProbeResults)-1]
+		log.Printf("  [%s/%s] %-18s prompt=%d tok, out=%d tok, %d ms",
+			scenarioID, probeID, p.Kind(), last.PromptTokens, last.OutputTokens, last.LatencyMs)
+	}
 }
 
 func (r *Runner) answer(ctx context.Context, p Pipeline, scenarioID string, history []datasets.Turn, probe datasets.Probe) (*ProbeResult, error) {
@@ -116,11 +130,4 @@ func (r *Runner) answer(ctx context.Context, p Pipeline, scenarioID string, hist
 		log.Printf("  cache write failed: %v", err)
 	}
 	return result, nil
-}
-
-func pct(num, den int) float64 {
-	if den == 0 {
-		return 0
-	}
-	return float64(num) / float64(den) * 100
 }
