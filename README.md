@@ -437,7 +437,7 @@ make stresstest
 # Same pipeline with mock embeddings + dual HNSW (no API spend)
 make stresstest-semantic
 
-# Export results to JSON (same as README recorded heuristic numbers)
+# Export results to JSON (tokenizer-backed numbers; see recorded run below)
 make stresstest-export
 
 # Custom options
@@ -518,12 +518,14 @@ Below is one **representative** bench captured **2026-05-14**: **`localhost:5005
 
 **Token savings analysis** — Replays 5 synthetic conversations (175 total turns) and compares, at each turn:
 
-- **Raw tokens:** cumulative verbatim transcript (`len`/4 summed over every prior turn)—the naive “send full history” baseline.
-- **Compiled tokens (`CompiledTokenCount`):** tokenizer-style estimate for the simulated next API call (`FinalPrompt` + current turn payload; system message omitted in harness). Matches production accounting after Phase 2: structured context blob plus the imminent user or assistant utterance once.
+- **Raw tokens:** cumulative verbatim transcript, counted with the real BPE tokenizer (`internal/tokenizer`, default **`o200k_base`** via `tiktoken-go`) and summed over every prior turn — the naive “send full history” baseline.
+- **Compiled tokens (`CompiledTokenCount`):** same tokenizer-backed count for the simulated next API call (`FinalPrompt` + current turn payload; system message omitted in the harness). Matches production accounting: structured context blob plus the imminent user or assistant utterance once.
+
+Both paths share one counter in `stresstest/runner/engine.go` (`tokenizer.Default()` → compiler via `NewCompilerWithCounter`). The historical `len(string)/4` approximation is used only if tiktoken fails to load (same defensive fallback as the rest of the codebase).
 
 Session-level reduction is **`(final_raw − final_compiled) / final_raw`**, evaluated on the **last turn**—this is exactly where naive history is largest versus a compressed active set plus one current message.
 
-Recorded run (**2026-05-13**), default policy (heuristic-only, `-semantic` off), bundled export:
+Recorded run (**2026-07-02**), default policy (heuristic-only, `-semantic` off), `go run ./stresstest/ -export stresstest/results.json`:
 
 ```bash
 go run ./stresstest/ -export stresstest/results.json
@@ -531,18 +533,18 @@ go run ./stresstest/ -export stresstest/results.json
 
 | Session | Turns | Final raw tokens | Final compiled | Saved | Reduction |
 |---|---:|---:|---:|---:|---:|
-| long_session | 66 | 11,109 | 2,508 | 8,601 | **77.4%** |
-| linear_deep_dive | 38 | 2,674 | 2,133 | 541 | **20.2%** |
-| tool_heavy | 20 | 1,884 | 1,560 | 324 | **17.2%** |
-| multi_topic_pivot | 31 | 1,710 | 1,732 | −22 | −1.3% |
-| backtracking | 20 | 1,322 | 1,325 | −3 | −0.2% |
-| **All sessions** | **175** | **18,699** | **9,258** | **9,441** | **50.5%** |
+| long_session | 66 | 8,831 | 2,276 | 6,555 | **74.2%** |
+| linear_deep_dive | 38 | 2,383 | 1,948 | 435 | **18.3%** |
+| tool_heavy | 20 | 1,894 | 1,593 | 301 | **15.9%** |
+| multi_topic_pivot | 31 | 1,533 | 1,547 | −14 | **−0.9%** |
+| backtracking | 20 | 1,128 | 1,136 | −8 | **−0.7%** |
+| **All sessions** | **175** | **15,769** | **8,500** | **7,269** | **46.1%** |
 
-**Scale takeaway:** **`long_session` is the throughput story** (~11k-token cumulative naive history vs ~2.5k-token compiled call)—where GC and compaction actually win. **`multi_topic_pivot`** and **`backtracking`** stays near parity or slightly negative: branching trees under the replay harness accumulate less linear raw history relative to Markdown section overhead (headers, separators) before compaction catches up fully.
+**Scale takeaway:** **`long_session` is the throughput story** (~8.8k-token cumulative naive history vs ~2.3k-token compiled call)—where GC and compaction actually win. **`multi_topic_pivot`** and **`backtracking`** stay near parity or slightly negative: branching trees under the replay harness accumulate less linear raw history relative to Markdown section overhead (headers, separators) before compaction catches up fully.
 
-With **`-semantic`** (mock deterministic embedder, no API cost), aggregate reduction on the same fixtures was ~**48.8%** overall (mock HNSW slightly shifts which nodes survive into the compilation set); `long_session` remained ~77% savings.
+With **`-semantic`** (mock deterministic embedder, no API cost), aggregate reduction on the same fixtures was ~**44.2%** overall (mock HNSW slightly shifts which nodes survive into the compilation set); `long_session` remained ~**74.1%** savings.
 
-Artifacts: `stresstest/results.json` (export from the heuristic run above).
+Artifacts: `stresstest/results.json` (export from the command above).
 
 **Coherency checks** — After GC runs, verifies that important context survives:
 - Goal nodes remain active
