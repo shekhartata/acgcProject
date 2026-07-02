@@ -90,7 +90,7 @@ func (j *JudgeClient) JudgePair(
 	bs := Score{
 		ScenarioID: baseline.ScenarioID,
 		ProbeID:    baseline.ProbeID,
-		Pipeline:   harness.PipelineBaseline,
+		Pipeline:   baseline.Pipeline,
 		Value:      baseScore,
 		Method:     "judge",
 		Detail:     baseReason,
@@ -98,7 +98,7 @@ func (j *JudgeClient) JudgePair(
 	as := Score{
 		ScenarioID: acgc.ScenarioID,
 		ProbeID:    acgc.ProbeID,
-		Pipeline:   harness.PipelineACGC,
+		Pipeline:   acgc.Pipeline,
 		Value:      acgcScore,
 		Method:     "judge",
 		Detail:     acgcReason,

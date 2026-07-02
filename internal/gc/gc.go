@@ -12,6 +12,7 @@ import (
 	"github.com/chandrashekhartata/acgc/internal/scorer"
 	"github.com/chandrashekhartata/acgc/internal/statetree"
 	"github.com/chandrashekhartata/acgc/internal/store"
+	"github.com/chandrashekhartata/acgc/internal/tokenizer"
 )
 
 type Policy struct {
@@ -307,12 +308,8 @@ func (c *SimpleCompressor) Compress(_ context.Context, nodes []*domain.StateNode
 		Decisions:    mergedDecisions,
 		OpenIssues:   issues,
 		RawEventRefs: eventRefs,
-		TokenCount:   estimateTokens(summary),
+		TokenCount:   tokenizer.Default().Count(summary),
 		CreatedAt:    time.Now(),
 		UpdatedAt:    time.Now(),
 	}, nil
-}
-
-func estimateTokens(s string) int {
-	return len(s) / 4
 }

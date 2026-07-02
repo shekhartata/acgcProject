@@ -13,6 +13,7 @@ import (
 	"github.com/chandrashekhartata/acgc/internal/scorer"
 	"github.com/chandrashekhartata/acgc/internal/session"
 	"github.com/chandrashekhartata/acgc/internal/statetree"
+	"github.com/chandrashekhartata/acgc/internal/tokenizer"
 	"github.com/chandrashekhartata/acgc/internal/vectorindex"
 	"github.com/chandrashekhartata/acgc/stresstest/fixtures"
 )
@@ -64,10 +65,6 @@ func DefaultConfig() EngineConfig {
 	}
 }
 
-func estimateTokens(s string) int {
-	return len(s) / 4
-}
-
 // ReplaySession runs a single conversation through the in-process ACGC pipeline
 // and returns per-turn stats showing raw vs compiled token counts.
 func ReplaySession(name string, turns []fixtures.Turn, cfg EngineConfig) SessionResult {
@@ -81,7 +78,8 @@ func ReplaySession(name string, turns []fixtures.Turn, cfg EngineConfig) Session
 	if cfg.SemanticWeight > 0 {
 		sc.SetSemanticWeight(cfg.SemanticWeight)
 	}
-	comp := compiler.NewCompiler(cfg.TokenBudget)
+	tc := tokenizer.Default()
+	comp := compiler.NewCompilerWithCounter(cfg.TokenBudget, tc)
 	gcPolicy := gc.Policy{
 		MaxPromptTokens:       cfg.TokenBudget,
 		MaxTreeDepth:          cfg.MaxTreeDepth,
@@ -119,7 +117,7 @@ func ReplaySession(name string, turns []fixtures.Turn, cfg EngineConfig) Session
 	cumulativeRawTokens := 0
 
 	for i, turn := range turns {
-		turnTokens := estimateTokens(turn.Content)
+		turnTokens := tc.Count(turn.Content)
 		cumulativeRawTokens += turnTokens
 
 		eventType := domain.EventUserPrompt

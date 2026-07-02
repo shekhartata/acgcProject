@@ -16,6 +16,7 @@ import (
 	"github.com/chandrashekhartata/acgc/eval/scoring"
 	"github.com/chandrashekhartata/acgc/internal/config"
 	"github.com/chandrashekhartata/acgc/internal/embedding"
+	"github.com/chandrashekhartata/acgc/internal/tokenizer"
 	"github.com/chandrashekhartata/acgc/internal/vectorindex"
 )
 
@@ -31,6 +32,10 @@ func main() {
 		tokenBudget   = flag.Int("acgc-budget", 6000, "ACGC token budget for the compiler")
 		verbose       = flag.Bool("v", false, "verbose per-probe logging")
 		semantic      = flag.Bool("semantic", false, "enable HNSW semantic scoring in the ACGC pipeline (requires embedder API key)")
+		strategiesArg = flag.String("strategies", "naive_full_history,acgc",
+			"comma-separated context strategies to compare (naive_full_history, sliding_window, acgc); the first is the reference")
+		maxTokens = flag.Int("max-tokens", 6000,
+			"max completion tokens for probe answers (reasoning models spend part of this on hidden reasoning)")
 	)
 	flag.Parse()
 
@@ -39,16 +44,22 @@ func main() {
 		log.Fatal("ACGC_LLM_API_KEY is required (or use -cache-only to replay from cache)")
 	}
 
+	strategyKinds, reference, err := parseStrategies(*strategiesArg)
+	if err != nil {
+		log.Fatalf("strategies: %v", err)
+	}
+
 	llmCfg := harness.LLMConfig{
 		BaseURL:     cfg.DefaultLLMBaseURL,
 		APIKey:      cfg.DefaultLLMAPIKey,
 		Model:       cfg.DefaultLLMModel,
 		Temperature: 0,
-		// Bumped from 800 → 2500. GPT-5 / o1 / o3 are reasoning models that
-		// consume part of MaxTokens for invisible reasoning. 800 was causing
-		// empty responses (reasoning overflow). 2500 leaves room for both
-		// reasoning and a substantive answer.
-		MaxTokens: 2500,
+		// Configurable via -max-tokens (default 6000). GPT-5 / o1 / o3 are
+		// reasoning models that consume part of MaxTokens for invisible
+		// reasoning, so too small a cap yields empty responses (reasoning
+		// overflow). The default leaves ample room for both reasoning and a
+		// substantive answer.
+		MaxTokens: *maxTokens,
 	}
 
 	acgcCfg := harness.DefaultACGCConfig()
@@ -85,15 +96,18 @@ func main() {
 		}
 	}
 
+	// Use a real, model-aware tokenizer for all prompt/token accounting.
+	counter := tokenizer.New(llmCfg.Model)
+	tokenizer.SetDefault(counter)
+
 	cache, err := harness.NewCache(*cacheDir, llmCfg.Model)
 	if err != nil {
 		log.Fatalf("cache init: %v", err)
 	}
 
-	baseline := harness.NewBaselinePipeline(llmCfg)
-	acgc := harness.NewACGCPipeline(llmCfg, acgcCfg)
+	pipelines := buildPipelines(strategyKinds, llmCfg, acgcCfg, counter)
 
-	runner := harness.NewRunner(cache, baseline, acgc, harness.RunnerOptions{
+	runner := harness.NewRunner(cache, pipelines, harness.RunnerOptions{
 		CacheOnly: *cacheOnly,
 		BudgetCap: *budgetCap,
 		Verbose:   *verbose,
@@ -108,6 +122,9 @@ func main() {
 	fmt.Println("║          ACGC Quality & Intelligence-Per-Token Evaluation                   ║")
 	fmt.Println("╚══════════════════════════════════════════════════════════════════════════════╝")
 	fmt.Printf("\n  Model: %s\n", llmCfg.Model)
+	fmt.Printf("  Tokenizer: %s\n", counter.Name())
+	fmt.Printf("  Strategies: %s (reference: %s)\n", strategyList(strategyKinds), reference)
+	fmt.Printf("  Budget: %d ctx tokens | answer cap: %d tokens\n", acgcCfg.TokenBudget, llmCfg.MaxTokens)
 	fmt.Printf("  Scenarios: %d\n", len(scenarios))
 	fmt.Printf("  Mode: %s\n", modeLabel(*cacheOnly, *useJudge))
 	if acgcCfg.Embedder != nil {
@@ -123,9 +140,12 @@ func main() {
 
 	ctx := context.Background()
 
-	allBaseline := make(map[string]harness.ProbeResult)
-	allACGC := make(map[string]harness.ProbeResult)
+	responses := make(map[harness.PipelineKind]map[string]harness.ProbeResult)
+	for _, k := range strategyKinds {
+		responses[k] = make(map[string]harness.ProbeResult)
+	}
 	var pairs []scoring.PairResult
+	var metrics []scoring.StrategyMetric
 
 	var judge *scoring.JudgeClient
 	if *useJudge {
@@ -139,7 +159,7 @@ func main() {
 	for _, sc := range scenarios {
 		fmt.Printf("  ▸ %s ... ", sc.ID)
 
-		baseRun, acgcRun, err := runner.RunScenario(ctx, sc)
+		runs, err := runner.RunScenario(ctx, sc)
 		if err != nil {
 			if errors.Is(err, harness.ErrBudgetExceeded) {
 				fmt.Println("budget cap hit — stopping")
@@ -150,62 +170,177 @@ func main() {
 		}
 
 		for i, probe := range sc.Probes {
-			baseResult := baseRun.ProbeResults[i]
-			acgcResult := acgcRun.ProbeResults[i]
 			key := sc.ID + "::" + probe.ID
-			allBaseline[key] = baseResult
-			allACGC[key] = acgcResult
 
-			scoreB := scoring.ScoreProbe(probe, baseResult)
-			scoreA := scoring.ScoreProbe(probe, acgcResult)
-
-			if scoreB.Value < 0 || scoreA.Value < 0 {
-				// open-ended probe — try judge if enabled
-				if judge != nil {
-					jb, ja, jerr := judge.JudgePair(ctx, probe, baseResult, acgcResult)
-					if jerr != nil {
-						log.Printf("    judge error for %s/%s: %v", sc.ID, probe.ID, jerr)
-						continue
-					}
-					scoreB = jb
-					scoreA = ja
-				} else {
-					// skip — no scoring method available
-					continue
-				}
+			// Collect each strategy's probe result.
+			results := make(map[harness.PipelineKind]harness.ProbeResult, len(strategyKinds))
+			for _, k := range strategyKinds {
+				res := runs[k].ProbeResults[i]
+				results[k] = res
+				responses[k][key] = res
 			}
 
-			pair := scoring.BuildPair(sc.ID, probe.ID, baseResult, acgcResult, scoreB, scoreA)
-			pairs = append(pairs, pair)
+			// Score every strategy. For open-ended (judge) probes, score the
+			// reference and each candidate via the blinded pairwise judge.
+			scores, ok := scoreAllStrategies(ctx, probe, strategyKinds, reference, results, judge)
+			if !ok {
+				continue // open-ended probe with no judge available
+			}
+
+			for _, k := range strategyKinds {
+				metrics = append(metrics, scoring.NewStrategyMetric(sc.ID, probe.ID, k, results[k], scores[k]))
+			}
+
+			refResult := results[reference]
+			refScore := scores[reference]
+			for _, k := range strategyKinds {
+				if k == reference {
+					continue
+				}
+				pair := scoring.BuildPair(sc.ID, probe.ID, reference, k, refResult, results[k], refScore, scores[k])
+				pairs = append(pairs, pair)
+			}
 		}
 
 		fmt.Printf("done (%d probes)\n", len(sc.Probes))
 	}
 
-	if len(pairs) == 0 {
-		fmt.Println("\n  No scored pairs produced. Did you forget -judge for open-ended scenarios?")
+	if len(metrics) == 0 {
+		fmt.Println("\n  No scored results produced. Did you forget -judge for open-ended scenarios?")
 		os.Exit(1)
 	}
 
+	strategyAggs := scoring.AggregateStrategies(metrics, strategyKinds, reference)
 	agg := scoring.AggregatePairs(pairs)
 
 	bundle := report.Bundle{
-		GeneratedAt:    time.Now(),
-		Model:          llmCfg.Model,
-		TokensSpent:    runner.TokensSpent(),
-		Pairs:          pairs,
-		Aggregate:      agg,
-		BaselineByPair: allBaseline,
-		ACGCByPair:     allACGC,
+		GeneratedAt:         time.Now(),
+		Model:               llmCfg.Model,
+		Tokenizer:           counter.Name(),
+		TokensSpent:         runner.TokensSpent(),
+		Strategies:          strategyKinds,
+		Reference:           reference,
+		StrategyAggregates:  strategyAggs,
+		StrategyMetrics:     metrics,
+		Pairs:               pairs,
+		Aggregate:           agg,
+		ResponsesByStrategy: responses,
 	}
 
 	if err := report.WriteAll(*resultsDir, bundle); err != nil {
 		log.Fatalf("write report: %v", err)
 	}
 
-	printSummary(agg, pairs, runner.TokensSpent())
+	printSummary(strategyAggs, agg, runner.TokensSpent())
 	fmt.Printf("\n  Report written to: %s/report.md\n", *resultsDir)
 	fmt.Printf("  Raw JSON: %s/results.json\n", *resultsDir)
+}
+
+// scoreAllStrategies scores every strategy for a probe. Deterministic probes
+// are scored independently; open-ended (judge) probes score the reference and
+// each candidate through the blinded pairwise judge. Returns ok=false when the
+// probe is open-ended but no judge is configured.
+func scoreAllStrategies(
+	ctx context.Context,
+	probe datasets.Probe,
+	strategyKinds []harness.PipelineKind,
+	reference harness.PipelineKind,
+	results map[harness.PipelineKind]harness.ProbeResult,
+	judge *scoring.JudgeClient,
+) (map[harness.PipelineKind]scoring.Score, bool) {
+	scores := make(map[harness.PipelineKind]scoring.Score, len(strategyKinds))
+
+	// Deterministic path: probe scoring returns >= 0.
+	deterministic := scoring.ScoreProbe(probe, results[reference])
+	if deterministic.Value >= 0 {
+		for _, k := range strategyKinds {
+			scores[k] = scoring.ScoreProbe(probe, results[k])
+		}
+		return scores, true
+	}
+
+	// Open-ended path.
+	if judge == nil {
+		return nil, false
+	}
+	refResult := results[reference]
+	refScoreSet := false
+	for _, k := range strategyKinds {
+		if k == reference {
+			continue
+		}
+		jb, jc, jerr := judge.JudgePair(ctx, probe, refResult, results[k])
+		if jerr != nil {
+			log.Printf("    judge error for probe %s (%s): %v", probe.ID, k, jerr)
+			continue
+		}
+		scores[k] = jc
+		if !refScoreSet {
+			scores[reference] = jb
+			refScoreSet = true
+		}
+	}
+	if !refScoreSet {
+		return nil, false
+	}
+	return scores, true
+}
+
+// parseStrategies resolves the -strategies flag into an ordered, de-duplicated
+// list of pipeline kinds. The first entry is the reference strategy.
+func parseStrategies(arg string) ([]harness.PipelineKind, harness.PipelineKind, error) {
+	seen := make(map[harness.PipelineKind]bool)
+	var kinds []harness.PipelineKind
+	for _, raw := range strings.Split(arg, ",") {
+		name := strings.TrimSpace(raw)
+		if name == "" {
+			continue
+		}
+		kind, ok := harness.ParseStrategyKind(name)
+		if !ok {
+			return nil, "", fmt.Errorf("unknown strategy %q (valid: naive_full_history, sliding_window, acgc)", name)
+		}
+		if seen[kind] {
+			continue
+		}
+		seen[kind] = true
+		kinds = append(kinds, kind)
+	}
+	if len(kinds) == 0 {
+		return nil, "", fmt.Errorf("no strategies selected")
+	}
+	if len(kinds) < 2 {
+		fmt.Println("  note: only one strategy selected — comparison table will have no candidate deltas")
+	}
+	return kinds, kinds[0], nil
+}
+
+// buildPipelines constructs a runnable pipeline per selected strategy.
+func buildPipelines(kinds []harness.PipelineKind, llmCfg harness.LLMConfig, acgcCfg harness.ACGCConfig, counter tokenizer.TokenCounter) []harness.Pipeline {
+	pipelines := make([]harness.Pipeline, 0, len(kinds))
+	for _, k := range kinds {
+		var strat harness.ContextStrategy
+		switch k {
+		case harness.PipelineNaive:
+			strat = harness.NewNaiveStrategy()
+		case harness.PipelineSliding:
+			strat = harness.NewSlidingStrategy()
+		case harness.PipelineACGC:
+			strat = harness.NewACGCStrategy(acgcCfg, counter)
+		default:
+			continue
+		}
+		pipelines = append(pipelines, harness.NewStrategyPipeline(strat, llmCfg, acgcCfg, counter))
+	}
+	return pipelines
+}
+
+func strategyList(kinds []harness.PipelineKind) string {
+	parts := make([]string, len(kinds))
+	for i, k := range kinds {
+		parts[i] = string(k)
+	}
+	return strings.Join(parts, ", ")
 }
 
 func selectScenarios(filter string) []datasets.Scenario {
@@ -241,23 +376,27 @@ func modeLabel(cacheOnly, judge bool) string {
 	return strings.Join(parts, ", ")
 }
 
-func printSummary(agg scoring.Aggregate, pairs []scoring.PairResult, tokensSpent int) {
+func printSummary(strategyAggs []scoring.StrategyAggregate, agg scoring.Aggregate, tokensSpent int) {
 	fmt.Println()
 	fmt.Println("  ╔═══════════════════════════════════════════════════════════════════════╗")
 	fmt.Println("  ║                            SUMMARY                                   ║")
 	fmt.Println("  ╚═══════════════════════════════════════════════════════════════════════╝")
 	fmt.Println()
-	fmt.Printf("  Pairs evaluated:        %d\n", agg.TotalPairs)
-	fmt.Printf("  Avg quality (baseline): %.2f / 5.0\n", agg.AvgQualityBaseline)
-	fmt.Printf("  Avg quality (ACGC):     %.2f / 5.0\n", agg.AvgQualityACGC)
-	fmt.Printf("  Quality delta:          %+.2f\n", agg.AvgQualityDelta)
-	fmt.Printf("  Token reduction:        %.1f%% avg\n", agg.AvgTokenReductionPct)
-	fmt.Printf("  IPT (baseline):         %.2f\n", agg.AvgIPTBaseline)
-	fmt.Printf("  IPT (ACGC):             %.2f\n", agg.AvgIPTACGC)
-	fmt.Printf("  IPT delta:              %+.1f%%\n", agg.AvgIPTDeltaPct)
+	fmt.Printf("  %-20s %8s %10s %10s %8s %10s\n", "Strategy", "Quality", "PromptTok", "Latency", "IPT", "TokRed%")
+	fmt.Printf("  %s\n", strings.Repeat("-", 72))
+	for _, a := range strategyAggs {
+		name := string(a.Strategy)
+		if a.IsReference {
+			name += " *"
+		}
+		fmt.Printf("  %-20s %8.2f %10.0f %9.0fms %8.2f %9.1f%%\n",
+			name, a.AvgQuality, a.AvgPromptTokens, a.AvgLatencyMs, a.AvgIPT, a.TokenReductionPctVsRef)
+	}
+	fmt.Println("  (* = reference strategy; TokRed% is vs reference)")
 	fmt.Println()
-	fmt.Printf("  Verdicts:  WIN=%d  WIN*=%d  TIE=%d  LOSS=%d  BASELINE_WIN=%d\n",
-		agg.ACGCWins, agg.ACGCWinsStar, agg.Ties, agg.ACGCLosses, agg.BaselineWins)
-	fmt.Printf("  Regressions (>1.0 quality drop): %d\n", agg.RegressionCount)
+	fmt.Printf("  Candidate-vs-reference verdicts:\n")
+	fmt.Printf("    WIN=%d  WIN*=%d  TIE=%d  LOSS=%d  REF_WIN=%d  (pairs=%d, regressions=%d)\n",
+		agg.ACGCWins, agg.ACGCWinsStar, agg.Ties, agg.ACGCLosses, agg.BaselineWins,
+		agg.TotalPairs, agg.RegressionCount)
 	fmt.Printf("\n  Live tokens spent this run: %d\n", tokensSpent)
 }

@@ -2,11 +2,32 @@
 
 A Go sidecar runtime that sits between an AI agent and its LLM, intercepting every interaction to build a structured context model. It scores relevance (**heuristic + optional semantic / embeddings**), prunes stale information, compresses resolved branches, and compiles only the most useful context into each LLM call — optionally **pulling archived nodes back into the prompt** via dual **HNSW** indexes — reducing token costs, lowering latency, and improving recall on long-range and topic-switching sessions.
 
+**How it plugs in** — your app stops sending the full conversation history to the LLM; ACGC takes that over:
+
+```
+┌──────────────┐   gRPC (Run)    ┌──────────────┐   HTTP    ┌──────────┐
+│  Your Agent  │ ──────────────► │  ACGC Server │ ────────► │  LLM API │
+│  Application │ ◄────────────── │  (sidecar)   │ ◄──────── │          │
+└──────────────┘  response+stats └──────┬───────┘           └──────────┘
+                                        │ async persistence
+                                    ┌───▼──────┐
+                                    │ MongoDB  │
+                                    └──────────┘
+```
+
 ---
 
 ## Table of Contents
 
-- [Problem](#problem)
+- [Why ACGC (the problem)](#why-acgc-the-problem)
+- [Quickstart — pick your path](#quickstart--pick-your-path)
+- [Integrating ACGC into your application](#integrating-acgc-into-your-application)
+  - [The sidecar model](#the-sidecar-model)
+  - [Go SDK (multi-turn)](#go-sdk-multi-turn)
+  - [Sessions, tasks, and the LLM key](#sessions-tasks-and-the-llm-key)
+  - [Capturing tool results and other events](#capturing-tool-results-and-other-events)
+  - [Other languages (gRPC)](#other-languages-grpc)
+  - [Interactive test client](#interactive-test-client)
 - [How It Works](#how-it-works)
   - [End-to-End Flow](#end-to-end-flow)
   - [State Tree](#state-tree)
@@ -20,23 +41,17 @@ A Go sidecar runtime that sits between an AI agent and its LLM, intercepting eve
   - [Dual-Path Design](#dual-path-design)
   - [Concurrency Model](#concurrency-model)
   - [Storage Layer](#storage-layer)
-- [Getting Started](#getting-started)
-  - [Prerequisites](#prerequisites)
-  - [Build and Run](#build-and-run)
-  - [Environment Variables](#environment-variables)
-- [Using ACGC](#using-acgc)
-  - [Go SDK](#go-sdk)
-  - [gRPC API](#grpc-api)
-  - [Interactive Test Client](#interactive-test-client)
-- [Stress Testing](#stress-testing)
-  - [Latency evaluation (`acgc-latencybench`)](#semantic-latency-benchmarking-acgc-latencybench)
-- [Quality Evaluation (LLM harness)](#quality-evaluation-llm-harness)
+- [Configuration reference](#configuration-reference)
+- [Benchmarks and Evaluation](#benchmarks-and-evaluation)
+  - [Stress test suite (no API key)](#stress-test-suite-no-api-key)
+  - [Latency benchmarking (`acgc-latencybench`)](#latency-benchmarking-acgc-latencybench)
+  - [Quality evaluation (LLM harness)](#quality-evaluation-llm-harness)
 - [Project Structure](#project-structure)
 - [Current Status vs Roadmap](#current-status-vs-roadmap)
 
 ---
 
-## Problem
+## Why ACGC (the problem)
 
 LLM-powered agents accumulate context over long conversations — user messages, assistant responses, tool calls, tool results, errors, retries. Without management, this context grows unbounded:
 
@@ -45,6 +60,194 @@ LLM-powered agents accumulate context over long conversations — user messages,
 - **Latency**: More input tokens = slower responses, especially with reasoning models (GPT-5, o3) that scale processing time with input size.
 
 ACGC solves this by treating context like memory in a running program — actively managing what stays, what gets compressed, and what gets archived.
+
+---
+
+## Quickstart — pick your path
+
+Different goals need different amounts of setup. Pick the row that matches yours:
+
+| I want to… | Path | Needs MongoDB? | Needs LLM API key? | Time |
+|---|---|---|---|---|
+| Sanity-check the pipeline and see token savings | [1. Smoke test](#path-1--smoke-test-no-keys-no-database) | No | No | ~2 min |
+| Chat with it live and watch GC/token stats per turn | [2. Live demo](#path-2--live-demo-server--test-client) | Yes | Yes | ~5 min |
+| Wire it into my own agent | [3. Integrate](#path-3--integrate-into-your-app) | Yes | Yes | ~10 min |
+| See quality/latency numbers vs naive baselines | [4. Benchmark](#path-4--benchmark-it) | Depends | Mostly yes | varies |
+
+**Prerequisites:** Go 1.25+. MongoDB only for paths 2–3 (local via `docker compose up -d mongodb`, or Atlas). `protoc` + Go gRPC plugins only if you regenerate protos.
+
+### Path 1 — Smoke test (no keys, no database)
+
+Runs the full ACGC pipeline in-process (tree → scorer → GC → compiler) against synthetic conversations:
+
+```bash
+go run ./stresstest/
+# Optional: exercise the semantic path with a mock embedder (still free)
+go run ./stresstest/ -semantic
+```
+
+You'll see per-session token reduction (e.g. ~74% on the 66-turn `long_session` fixture) and coherency checks. Details: [Stress test suite](#stress-test-suite-no-api-key).
+
+### Path 2 — Live demo (server + test client)
+
+```bash
+# 1. Configure: only two variables are required for this path
+cp .env.example .env
+#    Edit .env → set ACGC_MONGO_URI and ACGC_LLM_API_KEY
+
+# 2. Start MongoDB (skip if using Atlas)
+docker compose up -d mongodb
+
+# 3. Build and start the ACGC server
+make build && make run
+
+# 4. In another terminal: interactive REPL through a real LLM
+make testcli
+```
+
+Type messages and watch token savings, GC triggers, and compiled-prompt stats after each turn (`/state`, `/metrics`, `/gc`, `/quit`).
+
+### Path 3 — Integrate into your app
+
+Do Path 2 steps 1–3 (server running), then follow [Integrating ACGC into your application](#integrating-acgc-into-your-application). The short version: keep one `SessionID` per conversation and replace your direct LLM call with `runtime.Run(ctx, userMessage)` — ACGC compiles the context and calls the LLM for you.
+
+### Path 4 — Benchmark it
+
+Three harnesses answer three different questions — see [Benchmarks and Evaluation](#benchmarks-and-evaluation) for the orientation table, commands, and recorded numbers. You do **not** need to run any of them to use ACGC; they exist to justify it.
+
+---
+
+## Integrating ACGC into your application
+
+### The sidecar model
+
+ACGC is a separate process (default `localhost:50051`) that **owns the LLM call**. The integration change in your agent is:
+
+**Before** — your app manages history and calls the LLM directly:
+
+```go
+history = append(history, userMsg)
+resp := llmClient.Chat(ctx, history)   // full history every call, grows unbounded
+```
+
+**After** — your app sends only the new message to ACGC; ACGC maintains the context model, compiles a budgeted prompt, calls the LLM, and returns the response plus savings stats:
+
+```go
+result, _ := runtime.Run(ctx, userMsg) // ACGC handles history, compilation, and the LLM call
+```
+
+There is nothing else to keep in sync: ACGC persists raw events to MongoDB and rebuilds its in-memory state on restart ([Context Rehydration](#context-rehydration)).
+
+### Go SDK (multi-turn)
+
+A realistic chat loop — one runtime per conversation, `Run` on every user turn:
+
+```go
+package main
+
+import (
+    "bufio"
+    "context"
+    "fmt"
+    "log"
+    "os"
+
+    "github.com/chandrashekhartata/acgc/pkg/acgc"
+)
+
+func main() {
+    runtime, err := acgc.NewContextRuntime(acgc.Config{
+        ServerAddr:  "localhost:50051",
+        SessionID:   "user-42-chat-2026-07-02", // one per conversation; reuse across turns
+        TaskID:      "schema-design",           // logical task within the session
+        TokenBudget: 6000,                      // compiled prompt budget
+        Policy:      acgc.PolicyBalanced,       // or PolicyAggressive / PolicyConservative
+        LLM: acgc.LLMConfig{                    // optional — omit to use the server's ACGC_LLM_* config
+            Provider: "openai",
+            Model:    "gpt-5",
+            APIKey:   os.Getenv("OPENAI_API_KEY"),
+        },
+    })
+    if err != nil {
+        log.Fatal(err)
+    }
+    defer runtime.Close()
+
+    scanner := bufio.NewScanner(os.Stdin)
+    for fmt.Print("you> "); scanner.Scan(); fmt.Print("you> ") {
+        result, err := runtime.Run(context.Background(), scanner.Text())
+        if err != nil {
+            log.Printf("run failed: %v", err)
+            continue
+        }
+        fmt.Println(result.Response)
+        fmt.Printf("  [tokens: %d → %d, saved %.1f%%; GC: %v]\n",
+            result.OriginalTokens, result.CompiledTokens,
+            result.ReductionPercent, result.GCTriggered)
+    }
+}
+```
+
+Every `Run` returns the LLM response plus `OriginalTokens`, `CompiledTokens`, `TokensSaved`, `ReductionPercent`, and whether GC fired — so you can log savings per turn in production.
+
+### Sessions, tasks, and the LLM key
+
+- **`SessionID`** scopes the context model: one state tree, one worker goroutine, one pair of HNSW indexes per session. Use **one session per conversation** (per user chat, per agent job). Reusing the ID across turns is what gives ACGC its memory; a fresh ID starts a blank context. Idle sessions are cleaned up after `ACGC_SESSION_IDLE_TIMEOUT` (default 30 min) and can be rehydrated from MongoDB.
+- **`TaskID`** labels a logical task inside a session (used for grouping/metrics); `"default"` is fine.
+- **LLM config is optional per client.** If the SDK's `LLM.APIKey` is empty, the server uses its own `ACGC_LLM_*` env config. Pass per-request config when different callers need different models/keys; use server config when you want the key in exactly one place.
+
+### Capturing tool results and other events
+
+`Run` covers user turns. For agent loops that produce **tool calls, tool results, or errors**, feed them into the context model with `CaptureEvent` so the scorer and GC can see (and later prune) them:
+
+```go
+// After executing a tool in your agent loop:
+eventID, err := runtime.CaptureEvent(ctx, "tool_result", toolOutput, map[string]string{
+    "tool": "run_tests",
+})
+```
+
+Supported event types (from `internal/domain`): `user_prompt`, `agent_prompt`, `llm_response`, `tool_call`, `tool_result`, `error`, `retry`, `system`. Tool results are classified as low-retention nodes — they get swept quickly once resolved, which is usually exactly what you want.
+
+The SDK also exposes `TriggerGC(ctx)` (force a collection) and `Metrics(ctx)` (session-level savings and GC stats).
+
+### Other languages (gRPC)
+
+Any language can call ACGC via gRPC. The service definition is in `proto/acgc.proto`:
+
+| RPC | Description |
+|---|---|
+| `Run` | Full intercept → compile → forward → capture cycle |
+| `CaptureEvent` | Manually capture a single event into the state tree |
+| `GetState` | Inspect the current state tree and node scores |
+| `TriggerGC` | Manually trigger garbage collection |
+| `GetMetrics` | Get token savings, GC stats, and session metrics |
+
+Generate client stubs:
+
+```bash
+# Go (already generated)
+make proto
+
+# Python
+pip install grpcio-tools
+python -m grpc_tools.protoc -I proto --python_out=. --grpc_python_out=. proto/acgc.proto
+
+# TypeScript
+npx grpc_tools_node_protoc --ts_out=. --grpc_out=. -I proto proto/acgc.proto
+```
+
+The integration contract is the same as the SDK: call `Run(session_id, task_id, user_message, token_budget, policy, llm_config)` per user turn, keep `session_id` stable across the conversation.
+
+### Interactive test client
+
+The `testcli` binary provides a REPL for manually testing ACGC with a real LLM (server must be running):
+
+```bash
+make testcli
+```
+
+Type messages and see real-time token savings, GC triggers, and compiled prompt stats after each turn.
 
 ---
 
@@ -122,7 +325,7 @@ Every interaction is classified into a typed node and inserted into a tree struc
 | `compressed_branch` | Multiple old nodes compressed into one | Medium |
 | `background` | Miscellaneous context | Lowest |
 
-Nodes track: parent-child relationships, raw event references (for rehydration), token counts, creation/update times, dependency links to other nodes, optional **`Facts` / `Decisions`** string slices (see [Facts & Verbatim Decisions](#facts--verbatim-decisions)), and optional **`Embedding`** (+ model id) when semantic mode is on.
+Nodes track: parent-child relationships, raw event references (for rehydration), token counts, creation/update times, dependency links to other nodes, optional **`Facts` / `Decisions`** string slices (see [Facts and verbatim decisions](#facts-and-verbatim-decisions)), and optional **`Embedding`** (+ model id) when semantic mode is on.
 
 **Node lifecycle:** `active` → `stale` → `archived` (or `active` → `compressed` when a branch is compacted).
 
@@ -165,7 +368,7 @@ When **`ACGC_SEMANTIC_ENABLED=true`** and embed credentials are available:
 3. **Compile-time retrieval** — `CompilePrompt` embeds the **current user message**, queries Active **top‑K** and Archive **top‑K** separately, **`MergeSemanticHits`** keeps the best score per node id, then **`NodesForSemanticCompile`** unions **active nodes** plus **matching archived** nodes. **`CompileWithSemantic`** adjusts the effective sort/budget ranking using **`semantic_weight × (hitScore − node's prior semantic contribution)`** so the imminent query boosts relevant ghosts without rewriting stored scores wholesale.
 4. **Cold start** — Rehydrating a session rebuilds both graphs from Mongo via **`LoadNodeEmbeddings`** (active) and **`LoadArchivedNodeEmbeddings`** (archived-only).
 
-**Defaults (env):** `ACGC_SEMANTIC_WEIGHT=0.20`, `ACGC_HNSW_TOP_K_AT_COMPILE=12`, `ACGC_ARCHIVE_SEMANTIC_TOP_K=12`, `ACGC_HNSW_M=16`, `ACGC_HNSW_EF_SEARCH=50`, `ACGC_EMBED_MODEL=text-embedding-3-small`, `ACGC_EMBED_DIM=1536`. See [Environment Variables](#environment-variables).
+**Defaults (env):** `ACGC_SEMANTIC_WEIGHT=0.20`, `ACGC_HNSW_TOP_K_AT_COMPILE=12`, `ACGC_ARCHIVE_SEMANTIC_TOP_K=12`, `ACGC_HNSW_M=16`, `ACGC_HNSW_EF_SEARCH=50`, `ACGC_EMBED_MODEL=text-embedding-3-small`, `ACGC_EMBED_DIM=1536`. See [Configuration reference](#configuration-reference).
 
 The **stress** harness can exercise this path **without billing** embeddings using **`-semantic`** + a deterministic **`MockEmbedder`** (`make stresstest-semantic`).
 
@@ -218,7 +421,7 @@ The compiler (`internal/compiler`) builds **`FinalPrompt`**: Markdown sections (
 
 **Wire format (`internal/gateway`, `eval/harness`):** chat messages are **`[system, user(context = FinalPrompt), user(current message)]`** — the system string is **not** duplicated inside `FinalPrompt`; `CompiledTokenCount` accounts for **system + FinalPrompt + current user text** for apples-to-apples stats.
 
-**Token estimation:** `len(string) / 4` (~4 chars per token) for budgeting and stats.
+**Token counting:** a real, model-aware BPE tokenizer (`internal/tokenizer`, backed by `tiktoken-go`) is used for budgeting and stats. The encoding is resolved from the configured model (e.g. `o200k_base` for GPT-4o/GPT-5, `cl100k_base` for GPT-4). If the encoding can't be loaded it falls back to the historical `len(string) / 4` (~4 chars per token) approximation. `NewCompiler(budget)` remains supported (it uses the process-wide default counter); `NewCompilerWithCounter(budget, counter)` injects an explicit one.
 
 ---
 
@@ -271,39 +474,11 @@ MongoDB is only used for durability and analytics. The active state tree lives e
 
 ---
 
-## Getting Started
+## Configuration reference
 
-### Prerequisites
+Copy `.env.example` to `.env` and set what your path needs. **Minimum for a live server:** `ACGC_MONGO_URI` + `ACGC_LLM_API_KEY`. Everything else has sensible defaults. For semantic mode add `ACGC_SEMANTIC_ENABLED=true` (the embed key falls back to the LLM key).
 
-- Go 1.25+
-- MongoDB Atlas account (or local MongoDB via `docker compose up -d mongodb`)
-- `protoc` + Go gRPC plugins (only for proto regeneration)
-
-### Build and Run
-
-```bash
-# Copy and configure environment
-cp .env.example .env
-# Edit .env: set ACGC_MONGO_URI, optionally ACGC_LLM_API_KEY
-# For semantic mode on the server: ACGC_SEMANTIC_ENABLED=true plus embed access (defaults embed key to LLM key)
-
-# Build all binaries
-make build
-
-# Start the ACGC server
-make run
-
-# In another terminal, run the interactive test client
-make testcli
-
-# Run the stress test suite
-make stresstest
-
-# Full quality eval vs naive baseline (LLM + embeddings; see Quality Evaluation section)
-make eval-clean && make eval-semantic-judge
-```
-
-### Environment Variables
+### Environment variables
 
 | Variable | Default | Description |
 |---|---|---|
@@ -344,89 +519,17 @@ make eval-clean && make eval-semantic-judge
 
 ---
 
-## Using ACGC
+## Benchmarks and Evaluation
 
-### Go SDK
+Three harnesses answer three different questions. None are required to *use* ACGC — they justify it:
 
-```go
-package main
+| Question | Harness | Needs MongoDB | Needs API key | Cost |
+|---|---|---|---|---|
+| Does the pipeline work and save tokens? | [Stress test suite](#stress-test-suite-no-api-key) | No | No | Free |
+| How much wall-clock does ACGC add per call? | [Latency bench](#latency-benchmarking-acgc-latencybench) | Yes (live server) | Yes | LLM calls |
+| Does answer **quality** hold up vs naive context strategies? | [Quality evaluation](#quality-evaluation-llm-harness) | No (in-process) | Yes (+ embeddings with `-semantic`) | LLM + judge calls |
 
-import (
-    "context"
-    "fmt"
-    "log"
-
-    "github.com/chandrashekhartata/acgc/pkg/acgc"
-)
-
-func main() {
-    runtime, err := acgc.NewContextRuntime(acgc.Config{
-        ServerAddr:  "localhost:50051",
-        SessionID:   "my-session",
-        TaskID:      "my-task",
-        TokenBudget: 6000,
-        Policy:      acgc.PolicyBalanced,
-        LLM: acgc.LLMConfig{
-            Provider: "openai",
-            Model:    "gpt-5",
-            APIKey:   "sk-...",
-        },
-    })
-    if err != nil {
-        log.Fatal(err)
-    }
-    defer runtime.Close()
-
-    result, err := runtime.Run(context.Background(), "Help me design a database schema")
-    if err != nil {
-        log.Fatal(err)
-    }
-
-    fmt.Println(result.Response)
-    fmt.Printf("Tokens saved: %d (%.1f%% reduction)\n",
-        result.TokensSaved, result.ReductionPercent)
-}
-```
-
-### gRPC API
-
-Any language can call ACGC via gRPC. The service definition is in `proto/acgc.proto`:
-
-| RPC | Description |
-|---|---|
-| `Run` | Full intercept → compile → forward → capture cycle |
-| `CaptureEvent` | Manually capture a single event into the state tree |
-| `GetState` | Inspect the current state tree and node scores |
-| `TriggerGC` | Manually trigger garbage collection |
-| `GetMetrics` | Get token savings, GC stats, and session metrics |
-
-Generate client stubs for any language:
-
-```bash
-# Go (already generated)
-make proto
-
-# Python
-pip install grpcio-tools
-python -m grpc_tools.protoc -I proto --python_out=. --grpc_python_out=. proto/acgc.proto
-
-# TypeScript
-npx grpc_tools_node_protoc --ts_out=. --grpc_out=. -I proto proto/acgc.proto
-```
-
-### Interactive Test Client
-
-The `testcli` binary provides a REPL for manually testing ACGC with a real LLM:
-
-```bash
-make testcli
-```
-
-Type messages and see real-time token savings, GC triggers, and compiled prompt stats after each turn.
-
----
-
-## Stress Testing
+### Stress test suite (no API key)
 
 The stress test suite (`stresstest/`) validates ACGC's correctness and performance **without needing an LLM API key**. It runs the full ACGC pipeline in-process (tree → scorer → GC → compiler) against synthetic conversation fixtures.
 
@@ -437,14 +540,55 @@ make stresstest
 # Same pipeline with mock embeddings + dual HNSW (no API spend)
 make stresstest-semantic
 
-# Export results to JSON (same as README recorded heuristic numbers)
+# Export results to JSON (tokenizer-backed numbers; see recorded run below)
 make stresstest-export
 
 # Custom options
 ./bin/stresstest -budget 6000 -v -semantic -export stresstest/results.json -skip-concurrency
 ```
 
-### Semantic latency benchmarking (`acgc-latencybench`)
+#### What it tests
+
+**Token savings analysis** — Replays 5 synthetic conversations (175 total turns) and compares, at each turn:
+
+- **Raw tokens:** cumulative verbatim transcript, counted with the real BPE tokenizer (`internal/tokenizer`, default **`o200k_base`** via `tiktoken-go`) and summed over every prior turn — the naive “send full history” baseline.
+- **Compiled tokens (`CompiledTokenCount`):** same tokenizer-backed count for the simulated next API call (`FinalPrompt` + current turn payload; system message omitted in the harness). Matches production accounting: structured context blob plus the imminent user or assistant utterance once.
+
+Both paths share one counter in `stresstest/runner/engine.go` (`tokenizer.Default()` → compiler via `NewCompilerWithCounter`). The historical `len(string)/4` approximation is used only if tiktoken fails to load (same defensive fallback as the rest of the codebase).
+
+Session-level reduction is **`(final_raw − final_compiled) / final_raw`**, evaluated on the **last turn**—this is exactly where naive history is largest versus a compressed active set plus one current message.
+
+Recorded run (**2026-07-02**), default policy (heuristic-only, `-semantic` off), `go run ./stresstest/ -export stresstest/results.json`:
+
+| Session | Turns | Final raw tokens | Final compiled | Saved | Reduction |
+|---|---:|---:|---:|---:|---:|
+| long_session | 66 | 8,831 | 2,276 | 6,555 | **74.2%** |
+| linear_deep_dive | 38 | 2,383 | 1,948 | 435 | **18.3%** |
+| tool_heavy | 20 | 1,894 | 1,593 | 301 | **15.9%** |
+| multi_topic_pivot | 31 | 1,533 | 1,547 | −14 | **−0.9%** |
+| backtracking | 20 | 1,128 | 1,136 | −8 | **−0.7%** |
+| **All sessions** | **175** | **15,769** | **8,500** | **7,269** | **46.1%** |
+
+**Scale takeaway:** **`long_session` is the throughput story** (~8.8k-token cumulative naive history vs ~2.3k-token compiled call)—where GC and compaction actually win. **`multi_topic_pivot`** and **`backtracking`** stay near parity or slightly negative: branching trees under the replay harness accumulate less linear raw history relative to Markdown section overhead (headers, separators) before compaction catches up fully.
+
+With **`-semantic`** (mock deterministic embedder, no API cost), aggregate reduction on the same fixtures was ~**44.2%** overall (mock HNSW slightly shifts which nodes survive into the compilation set); `long_session` remained ~**74.1%** savings.
+
+Artifacts: `stresstest/results.json` (export from the command above).
+
+**Coherency checks** — After GC runs, verifies that important context survives:
+- Goal nodes remain active
+- Constraint nodes survive GC
+- Recent messages appear in the compiled prompt
+- No orphaned dependency references
+- Compiled prompt is non-empty and within token budget
+
+**Concurrency stress tests** (run with Go's `-race` detector):
+- Parallel sessions: all 5 conversations replayed simultaneously
+- Concurrent read/write: 1 writer + 5 readers on the same state tree
+- GC under contention: GC running while readers query concurrently
+- Concurrent compile: 10 compilers reading the same tree in parallel
+
+### Latency benchmarking (`acgc-latencybench`)
 
 The **`acgc-latencybench`** binary (`cmd/acgc-latencybench` + `internal/latencybench/`) measures **how long each path takes** under a repeatable fixture: it runs a **naive baseline** (one direct LLM call with the full scripted transcript) and **`Run`** over **gRPC** to a live **`./bin/acgc`** server.
 
@@ -514,58 +658,19 @@ Below is one **representative** bench captured **2026-05-14**: **`localhost:5005
 
 **Takeaway:** On this fixture, **`Run`** was **~2–4 s slower at median/tail** than sending the naive transcript once; **most of wall clock inside `Run` is still `llm_ms`**. Your numbers will vary with **model**, **network**, **`warm-settle-delay`**, and **`discard_n`**.
 
-### What It Tests
+### Quality evaluation (LLM harness)
 
-**Token savings analysis** — Replays 5 synthetic conversations (175 total turns) and compares, at each turn:
+The **`eval/`** package runs end-to-end comparisons across a configurable set of **context strategies** selected with `-strategies` (comma-separated, first = reference):
 
-- **Raw tokens:** cumulative verbatim transcript (`len`/4 summed over every prior turn)—the naive “send full history” baseline.
-- **Compiled tokens (`CompiledTokenCount`):** tokenizer-style estimate for the simulated next API call (`FinalPrompt` + current turn payload; system message omitted in harness). Matches production accounting after Phase 2: structured context blob plus the imminent user or assistant utterance once.
+- **`naive_full_history`** — all history up to the token budget (the default reference; "no context management").
+- **`sliding_window`** — most-recent context only, filling the budget newest-first.
+- **`acgc`** — full ACGC replay with GC/compiler and optional **semantic retrieval** (active + archive HNSW).
 
-Session-level reduction is **`(final_raw − final_compiled) / final_raw`**, evaluated on the **last turn**—this is exactly where naive history is largest versus a compressed active set plus one current message.
+Every strategy shares the same system prompt, budget, LLM, tokenizer, scoring, and cache, so results are directly comparable. It records **prompt token counts** (via a real model-aware BPE tokenizer, `internal/tokenizer`), **latency**, **probe-based** factual checks (`MatchContains*` on expected needles), **LLM-as-judge** scores for open-ended probes, **intelligence-per-token** (IPT = quality ÷ prompt tokens), and aggregates candidate-vs-reference verdicts plus a side-by-side per-strategy table.
 
-Recorded run (**2026-05-13**), default policy (heuristic-only, `-semantic` off), bundled export:
+Requires **`ACGC_LLM_API_KEY`** (and embeddings when using `-semantic`; see `eval/README.md`). Reports land in **`eval/results/`** (`report.md`, `results.json`). Run all three strategies with `make eval-strategies` or `go run ./eval -strategies "naive_full_history,sliding_window,acgc" -v`.
 
-```bash
-go run ./stresstest/ -export stresstest/results.json
-```
-
-| Session | Turns | Final raw tokens | Final compiled | Saved | Reduction |
-|---|---:|---:|---:|---:|---:|
-| long_session | 66 | 11,109 | 2,508 | 8,601 | **77.4%** |
-| linear_deep_dive | 38 | 2,674 | 2,133 | 541 | **20.2%** |
-| tool_heavy | 20 | 1,884 | 1,560 | 324 | **17.2%** |
-| multi_topic_pivot | 31 | 1,710 | 1,732 | −22 | −1.3% |
-| backtracking | 20 | 1,322 | 1,325 | −3 | −0.2% |
-| **All sessions** | **175** | **18,699** | **9,258** | **9,441** | **50.5%** |
-
-**Scale takeaway:** **`long_session` is the throughput story** (~11k-token cumulative naive history vs ~2.5k-token compiled call)—where GC and compaction actually win. **`multi_topic_pivot`** and **`backtracking`** stays near parity or slightly negative: branching trees under the replay harness accumulate less linear raw history relative to Markdown section overhead (headers, separators) before compaction catches up fully.
-
-With **`-semantic`** (mock deterministic embedder, no API cost), aggregate reduction on the same fixtures was ~**48.8%** overall (mock HNSW slightly shifts which nodes survive into the compilation set); `long_session` remained ~77% savings.
-
-Artifacts: `stresstest/results.json` (export from the heuristic run above).
-
-**Coherency checks** — After GC runs, verifies that important context survives:
-- Goal nodes remain active
-- Constraint nodes survive GC
-- Recent messages appear in the compiled prompt
-- No orphaned dependency references
-- Compiled prompt is non-empty and within token budget
-
-**Concurrency stress tests** (run with Go's `-race` detector):
-- Parallel sessions: all 5 conversations replayed simultaneously
-- Concurrent read/write: 1 writer + 5 readers on the same state tree
-- GC under contention: GC running while readers query concurrently
-- Concurrent compile: 10 compilers reading the same tree in parallel
-
----
-
-## Quality Evaluation (LLM harness)
-
-The **`eval/`** package runs end-to-end comparisons between a **naive baseline** (full chat history + probe as the last user message) and the **ACGC pipeline** (in-process replay with GC/compiler; optional **semantic retrieval** active + archive HNSW). It records **prompt token counts**, **latency**, **probe-based** factual checks (`MatchContains*` on expected needles), **LLM-as-judge** scores for open-ended probes, **intelligence-per-token** (IPT = quality ÷ prompt tokens), and aggregates a win/tie verdict per pair.
-
-Requires **`ACGC_LLM_API_KEY`** (and embeddings when using `-semantic`; see `eval/README.md`). Reports land in **`eval/results/`** (`report.md`, `results.json`).
-
-### How to reproduce
+#### How to reproduce
 
 ```bash
 make eval-clean    # wipe eval/cache + eval/results (optional but recommended for fresh run)
@@ -574,36 +679,51 @@ make eval-semantic-judge
 
 Equivalent: `go run ./eval -v -semantic -judge`
 
-### Recorded run (**2026-05-13**)
+#### Recorded run (**2026-07-01**)
 
-Configuration as executed: **`gpt-5`** for answer + judge generations (from **`ACGC_LLM_MODEL`** / env), embeddings via **`go run`** flag **`-semantic`** (`text-embedding-3-small`), semantic weight **0.20**, top-K **12**, archive semantic top-K **12**. **8 probe pairs**, **~27.9k** live tokens billed for answers, embeddings, and judge calls combined on that run.
+Configuration as executed: **`gpt-5`** for answer + judge generations (from **`ACGC_LLM_MODEL`** / env), embeddings via **`-semantic`** (`text-embedding-3-small`), semantic weight **0.20**, top-K **12**, archive semantic top-K **12**, LLM judge on, raised answer cap via **`-max-tokens`** (see below). **Three strategies compared** — `naive_full_history` (reference), `sliding_window`, `acgc` — across **7 scenarios / 12 probes each** (24 candidate-vs-reference pairs).
 
-#### Aggregate summary
+##### Aggregate summary (per strategy, 12 probes)
 
-| Metric | Baseline | ACGC |
-|---|---:|---:|
-| Avg quality (/5.0) | 3.44 | **3.75** |
-| Avg prompt token reduction (positive = fewer tokens vs baseline) | — | **+10.9%** |
-| Avg IPT (quality ÷ prompt tokens × scale) | 4.10 | **5.59** (**+36.4%**) |
-| Verdict breakdown | — | **`ACGC_WIN`** = **6**, `TIE` = **2**, `LOSS` = **0** |
-| Large quality regressions (more than a 1.0 score drop vs baseline on the same pair) | — | **0** |
+| Strategy | Avg quality (/5.0) | Avg prompt tokens | Avg IPT | Token reduction vs ref | Quality Δ vs ref |
+|---|---:|---:|---:|---:|---:|
+| `naive_full_history` (ref) | 5.00 | 2738 | 4.59 | 0.0% | +0.00 |
+| `sliding_window` | 3.25 | 2733 | 4.25 | 0.2% | **−1.75** |
+| `acgc` | **5.00** | **2082** | **5.05** | **24.0%** | **+0.00** |
 
-Interpretation (harness semantics): **`ACGC_WIN`** = strictly better IPT on that pair **without** a quality regression relative to baseline; probes that still tie on quality remain **`TIE`**.
+Candidate-vs-reference verdicts across 24 pairs: **`ACGC_WIN` = 12, `TIE` = 8, `ACGC_LOSS` = 4** (all four losses are `sliding_window` on the deep-history scenario; **ACGC has zero regressions**).
 
-#### Per-scenario highlights
+Interpretation (harness semantics): **`ACGC_WIN`** = strictly better IPT on that pair **without** a quality regression relative to the reference; probes that tie on quality with no token win remain **`TIE`**. **`acgc` matches the reference's perfect quality at 24% fewer tokens and the best IPT, while `sliding_window` — a pure recency heuristic — saves no tokens and collapses in quality once history exceeds the budget.**
 
-| Scenario / probe | Scoring | Quality (B / A) | Prompt tokens (B / A) | Token savings | Verdict |
+##### Two regimes
+
+**Regime 1 — history fits the budget (the six small scenarios).** No strategy has to truncate, so `sliding_window` sees the same full history as the reference (**identical prompts → `TIE`, 0% savings**), while `acgc` still compresses for a free discount at equal quality:
+
+| Scenario / probe | Scoring | Quality (ref / acgc) | Prompt tokens (ref / acgc) | Token savings | Verdict (acgc) |
 |---|---|---:|---:|---:|---|
-| `long_range_recall_1` / `p1`–`p3` | Probe | 5.0 / 5.0 | ~1125 / ~978 avg | ~**13.1%** each | **`ACGC_WIN`** (×3) |
-| `topic_switch_return_1` / `p1` | Probe | 5.0 / 5.0 | 804 / **724** | **10.0%** | **`ACGC_WIN`** |
-| `contradiction_1` / `p1` | Judge | 5.0 / 5.0 | 993 / **878** | **11.6%** | **`ACGC_WIN`** |
-| `recent_recall_1` / `p1` | Probe | 2.5 / **5.0** | 305 / **298** | **2.3%** | **`ACGC_WIN`** |
-| `constraint_adherence_1` / `p1` | Judge | 0 / 0 | 864 / **761** | **11.9%** | **`TIE`** |
-| `multi_hop_synth_1` / `p1` | Judge | 0 / 0 | 1143 / **1000** | **12.5%** | **`TIE`** |
+| `recent_recall_1` / `p1` | Probe | 5.0 / 5.0 | 307 / **298** | **2.9%** | **`ACGC_WIN`** |
+| `long_range_recall_1` / `p1`–`p3` | Probe | 5.0 / 5.0 | ~1092 / ~**977** | ~**10.5%** each | **`ACGC_WIN`** (×3) |
+| `constraint_adherence_1` / `p1` | Judge | 5.0 / 5.0 | 842 / **761** | **9.6%** | **`ACGC_WIN`** |
+| `topic_switch_return_1` / `p1` | Probe | 5.0 / 5.0 | 787 / **724** | **8.0%** | **`ACGC_WIN`** |
+| `contradiction_1` / `p1` | Judge | 5.0 / 5.0 | 969 / **878** | **9.4%** | **`ACGC_WIN`** |
+| `multi_hop_synth_1` / `p1` | Judge | 5.0 / 5.0 | 1111 / **1000** | **10.0%** | **`ACGC_WIN`** |
 
-The two **`TIE`** rows scored **0 / 0** because both pipelines returned **empty assistant text** for that probe (typically the model exhausting its completion budget before emitting visible tokens). They still show material **prompt-token savings** for ACGC. The **`recent_recall_1`** baseline quality **2.5** reflects asymmetric judge/stringency noise on one run—the ACGC branch matched all expected needles with a shorter prompt.
+**Regime 2 — history exceeds the budget (`deep_history_recall_1`, ~13.3k raw tokens, >2× the 6000-token budget).** Four decisions stated up front are buried under ~13k tokens of filler. Now the budget bites and the strategies diverge hard:
 
-Artifacts for this snapshot: regenerate with the command above, or inspect **`eval/results/report.md`** + **`eval/results/results.json`** after a local run.
+| Probe | Quality (ref / cand) | Prompt tokens (ref / cand) | Token savings | Verdict |
+|---|---:|---:|---:|---|
+| `deep_history_recall_1` / `p1`–`p4` · **acgc** | 5.0 / **5.0** | ~6392 / **~4597** | ~**28%** each | **`ACGC_WIN`** (×4) |
+| `deep_history_recall_1` / `p1`–`p4` · **sliding_window** | 5.0 / **0.0** | ~6392 / ~6378 | ~0.2% | **`ACGC_LOSS`** (×4) |
+
+- **`naive_full_history`** fills the budget oldest-first, so the early decisions stay in-window → recalls all four (5.0), but burns the full ~6,400-token budget.
+- **`sliding_window`** fills newest-first, so the early decisions fall off the window entirely → **0.0 on every probe** at the same token cost — the silent "lost the old decision" failure mode.
+- **`acgc`** retention-scores + compresses, keeping the four decisions at **~28% lower token cost** with full quality.
+
+##### On the raised answer cap
+
+Two reasoning-heavy probes (`constraint_adherence_1`, `multi_hop_synth_1`) previously exhausted the old hardcoded 2,500-token completion cap on hidden reasoning and returned **empty text scored 0**. With the new **`-max-tokens`** flag (default **6000**, raised to **10000** for this run to give the compressed-context `multi_hop` probe enough room), **all previously-empty probes now produce non-empty scored answers** — which is why the reference and `acgc` both reach a clean 5.00 aggregate.
+
+Artifacts for this snapshot: regenerate with the command above (add `-max-tokens 10000` for the reasoning-heavy probes), or inspect **`eval/results/report.md`** + **`eval/results/results.json`**.
 
 ---
 
@@ -629,6 +749,7 @@ acgcProject/
 │   ├── embedding/         # OpenAI-compatible embed provider interface
 │   ├── vectorindex/       # In-memory HNSW wrapper (dual Active/Archive per session)
 │   ├── llm/               # OpenAI-compatible HTTP client (GPT-5/o3 reasoning model support)
+│   ├── tokenizer/         # Model-aware BPE token counting (tiktoken-go + fallback)
 │   ├── session/           # Session worker + CompilePrompt semantic merge helpers
 │   └── gateway/           # gRPC server implementation
 ├── stresstest/
@@ -638,7 +759,7 @@ acgcProject/
 ├── eval/
 │   ├── main.go            # Eval CLI
 │   ├── datasets/          # Scripted scenarios + probes
-│   ├── harness/           # Naive baseline vs ACGC replay + caching
+│   ├── harness/           # Pluggable context strategies (naive/sliding/acgc) + caching
 │   ├── scoring/           # Probe matching + LLM judge + metrics
 │   └── report/            # Generates eval/results/report.md and results.json
 ├── mongo-init/            # MongoDB index + TTL setup script
@@ -671,7 +792,7 @@ acgcProject/
 | Context rehydration | Done | Pull raw events from archive for compressed branches |
 | Interactive test client | Done | REPL with real LLM integration |
 | Stress test suite | Done | Token savings, coherency, concurrency (race-free) |
-| Quality evaluation (`eval/`) | Done | Baseline vs ACGC with probe + judge scoring; semantic path optional |
+| Quality evaluation (`eval/`) | Done | Pluggable strategies (naive / sliding_window / acgc) with probe + judge scoring; semantic path optional |
 | LLM compatibility | Done | GPT-5 / o3 reasoning model support (dynamic parameter handling) |
 
 ### Planned (Post-MVP)

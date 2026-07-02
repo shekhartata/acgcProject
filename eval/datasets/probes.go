@@ -9,6 +9,7 @@ func All() []Scenario {
 		topicSwitchAndReturn(),
 		contradictionHandling(),
 		multiHopSynthesis(),
+		deepHistoryRecall(),
 	}
 }
 
