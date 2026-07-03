@@ -123,6 +123,9 @@ func main() {
 	})
 
 	allScenarios := datasets.All()
+	// External runs write to prefixed files (external_<sources>_report.md)
+	// so they never clobber the built-in scenario report.
+	reportPrefix := ""
 	if *externalArg != "" {
 		// External probes are judge-scored (free-form gold answers), so a
 		// live run without -judge would skip every probe. Cache-only parse
@@ -130,7 +133,7 @@ func main() {
 		if !*useJudge && !*cacheOnly {
 			log.Fatal("-external requires -judge (external benchmark probes are judge-scored)")
 		}
-		ext, err := loadExternalScenarios(*externalArg, external.Options{
+		ext, sourceNames, err := loadExternalScenarios(*externalArg, external.Options{
 			Sample: *externalSample,
 			Seed:   *externalSeed,
 			Types:  splitNonEmpty(*externalTypes),
@@ -138,7 +141,10 @@ func main() {
 		if err != nil {
 			log.Fatalf("external benchmarks: %v", err)
 		}
-		allScenarios = append(allScenarios, ext...)
+		// An external run evaluates ONLY the external scenarios; the
+		// built-in scenario report (report.md/results.json) is untouched.
+		allScenarios = ext
+		reportPrefix = "external_" + strings.Join(sourceNames, "_")
 	}
 
 	scenarios := selectScenarios(*scenariosFlag, allScenarios)
@@ -255,13 +261,13 @@ func main() {
 		ResponsesByStrategy: responses,
 	}
 
-	if err := report.WriteAll(*resultsDir, bundle); err != nil {
+	if err := report.WriteAll(*resultsDir, reportPrefix, bundle); err != nil {
 		log.Fatalf("write report: %v", err)
 	}
 
 	printSummary(strategyAggs, agg, runner.TokensSpent())
-	fmt.Printf("\n  Report written to: %s/report.md\n", *resultsDir)
-	fmt.Printf("  Raw JSON: %s/results.json\n", *resultsDir)
+	fmt.Printf("\n  Report written to: %s/%s\n", *resultsDir, report.FileName(reportPrefix, "report.md"))
+	fmt.Printf("  Raw JSON: %s/%s\n", *resultsDir, report.FileName(reportPrefix, "results.json"))
 }
 
 // scoreAllStrategies scores every strategy for a probe. Deterministic probes
@@ -389,9 +395,11 @@ func selectScenarios(filter string, all []datasets.Scenario) []datasets.Scenario
 }
 
 // loadExternalScenarios parses the -external flag ("name=path,name=path")
-// and loads scenarios from each registered adapter.
-func loadExternalScenarios(arg string, opts external.Options) ([]datasets.Scenario, error) {
+// and loads scenarios from each registered adapter. It also returns the
+// source names in flag order, used to prefix the report files.
+func loadExternalScenarios(arg string, opts external.Options) ([]datasets.Scenario, []string, error) {
 	var out []datasets.Scenario
+	var names []string
 	for _, pair := range strings.Split(arg, ",") {
 		pair = strings.TrimSpace(pair)
 		if pair == "" {
@@ -399,21 +407,23 @@ func loadExternalScenarios(arg string, opts external.Options) ([]datasets.Scenar
 		}
 		name, path, ok := strings.Cut(pair, "=")
 		if !ok {
-			return nil, fmt.Errorf("bad -external entry %q (want name=path)", pair)
+			return nil, nil, fmt.Errorf("bad -external entry %q (want name=path)", pair)
 		}
-		src, found := external.Lookup(strings.TrimSpace(name))
+		name = strings.TrimSpace(name)
+		src, found := external.Lookup(name)
 		if !found {
-			return nil, fmt.Errorf("unknown external source %q (available: %s)",
+			return nil, nil, fmt.Errorf("unknown external source %q (available: %s)",
 				name, strings.Join(external.Names(), ", "))
 		}
 		scenarios, err := src.Load(strings.TrimSpace(path), opts)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		log.Printf("external: loaded %d scenarios from %s (%s)", len(scenarios), name, path)
 		out = append(out, scenarios...)
+		names = append(names, name)
 	}
-	return out, nil
+	return out, names, nil
 }
 
 func splitNonEmpty(s string) []string {

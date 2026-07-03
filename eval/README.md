@@ -128,7 +128,7 @@ make eval-locomo                  # 10 conversations, 20 sampled probes each
 
 # or hand-rolled:
 go run ./eval -v -judge \
-  -external "longmemeval=eval/datasets/external/data/longmemeval_s.json" \
+  -external "longmemeval=eval/datasets/external/data/longmemeval_s_cleaned.json" \
   -external-sample 10 -external-seed 42 \
   -external-types "multi-session,temporal-reasoning"
 ```
@@ -141,6 +141,13 @@ go run ./eval -v -judge \
 | `-external-sample` | `20` | Cap per source: instances for LongMemEval, probes per conversation for LoCoMo. `0` = all. |
 | `-external-seed` | `42` | Seed for deterministic subsampling — the same seed always selects the same subset, keeping cache keys stable across runs. |
 | `-external-types` | (empty) | Filter by question type (LongMemEval: `single-session-user`, `multi-session`, `temporal-reasoning`, `knowledge-update`, ...) or category (LoCoMo: `single_hop`, `multi_hop`, `temporal`, `open_domain`, `adversarial`). |
+
+External runs evaluate **only** the external scenarios and write to their own
+prefixed files, so the built-in report is never clobbered:
+
+- `eval/results/external_longmemeval_report.md` / `..._results.json`
+- `eval/results/external_locomo_report.md` / `..._results.json`
+- (a mixed run writes `external_longmemeval_locomo_*`)
 
 Cost warning: external instances are much larger than the built-in scenarios
 (LongMemEval-S is ~115k history tokens per instance before budgeting). Start

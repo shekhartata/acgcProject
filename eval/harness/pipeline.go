@@ -78,7 +78,7 @@ func (p *StrategyPipeline) Answer(ctx context.Context, history []datasets.Turn, 
 	messages := assembleMessages(in.SystemPrompt, out.FinalPrompt, probe.Question)
 
 	start := time.Now()
-	result, genErr := p.client.Generate(ctx, messages, p.cfg.Temperature, p.cfg.MaxTokens)
+	result, genErr := GenerateWithRetry(ctx, p.client, messages, p.cfg.Temperature, p.cfg.MaxTokens)
 	pr.LatencyMs = time.Since(start).Milliseconds()
 
 	if genErr != nil {

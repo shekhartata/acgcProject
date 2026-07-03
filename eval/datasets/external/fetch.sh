@@ -26,25 +26,27 @@ fetch_locomo() {
 }
 
 fetch_longmemeval() {
-  local out="$DATA_DIR/longmemeval_s.json"
+  local out="$DATA_DIR/longmemeval_s_cleaned.json"
   if [[ -s "$out" ]]; then
     echo "longmemeval: $out already exists, skipping"
     return
   fi
-  # LongMemEval data is distributed via Hugging Face. longmemeval_s (~40 MB)
-  # is the "small" haystack variant: ~115k tokens of history per instance.
-  echo "longmemeval: downloading longmemeval_s.json from Hugging Face (~40 MB)..."
+  # The author deprecated the original longmemeval dataset in favor of
+  # longmemeval-cleaned (removes noisy history sessions that interfere with
+  # answer correctness). longmemeval_s is the "small" haystack variant:
+  # ~50 sessions / ~115k history tokens per instance.
+  echo "longmemeval: downloading longmemeval_s_cleaned.json from Hugging Face (~40 MB)..."
   if ! curl -fL --retry 3 -o "$out" \
-    "https://huggingface.co/datasets/xiaowu0162/longmemeval/resolve/main/longmemeval_s.json"; then
+    "https://huggingface.co/datasets/xiaowu0162/longmemeval-cleaned/resolve/main/longmemeval_s_cleaned.json"; then
     cat >&2 <<'EOF'
 longmemeval: automatic download failed.
 
-The dataset may require accepting terms on Hugging Face. Fetch it manually:
-  1. Visit https://huggingface.co/datasets/xiaowu0162/longmemeval
-     (or the Google Drive link in https://github.com/xiaowu0162/LongMemEval)
-  2. Download longmemeval_s.json (or longmemeval_oracle.json for a small,
-     evidence-only variant that is much cheaper to run)
-  3. Place it at eval/datasets/external/data/longmemeval_s.json
+Fetch it manually:
+  1. Visit https://huggingface.co/datasets/xiaowu0162/longmemeval-cleaned
+     (or the links in https://github.com/xiaowu0162/LongMemEval)
+  2. Download longmemeval_s_cleaned.json (or longmemeval_oracle.json for a
+     small, evidence-only variant that is much cheaper to run)
+  3. Place it at eval/datasets/external/data/longmemeval_s_cleaned.json
 EOF
     rm -f "$out"
     exit 1

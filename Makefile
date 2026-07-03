@@ -113,7 +113,7 @@ eval-fetch-external:
 eval-longmemeval:
 	go run ./eval -v -judge \
 		-strategies "naive_full_history,sliding_window,acgc" \
-		-external "longmemeval=$(EXTERNAL_DATA)/longmemeval_s.json" \
+		-external "longmemeval=$(EXTERNAL_DATA)/longmemeval_s_cleaned.json" \
 		-external-sample 20
 
 # LoCoMo: all 10 conversations, 20 sampled probes each, judge-scored.
