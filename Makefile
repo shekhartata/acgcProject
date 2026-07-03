@@ -2,7 +2,7 @@ PROTO_DIR := proto
 API_DIR := api/proto
 BINARY := acgc
 
-.PHONY: proto build run test clean tidy lint mongo mongo-down mongo-logs mongo-shell stresstest eval eval-cached eval-judge eval-strategies eval-semantic eval-semantic-judge stresstest-semantic latency-bench
+.PHONY: proto build run test clean tidy lint mongo mongo-down mongo-logs mongo-shell stresstest eval eval-cached eval-judge eval-strategies eval-semantic eval-semantic-judge stresstest-semantic latency-bench eval-fetch-external eval-longmemeval eval-locomo
 
 # --- Build ---
 
@@ -99,6 +99,29 @@ eval-semantic-judge:
 # semantic code paths under -race without spending any cents.
 stresstest-semantic:
 	go run -race ./stresstest/ -v -semantic
+
+# --- External benchmarks (LongMemEval, LoCoMo) ---
+
+EXTERNAL_DATA := eval/datasets/external/data
+
+# Download benchmark data files (not vendored; ~40 MB for LongMemEval).
+eval-fetch-external:
+	./eval/datasets/external/fetch.sh
+
+# LongMemEval: 20 sampled instances, judge-scored, all three strategies.
+# Costs real tokens — each instance carries a large multi-session haystack.
+eval-longmemeval:
+	go run ./eval -v -judge \
+		-strategies "naive_full_history,sliding_window,acgc" \
+		-external "longmemeval=$(EXTERNAL_DATA)/longmemeval_s.json" \
+		-external-sample 20
+
+# LoCoMo: all 10 conversations, 20 sampled probes each, judge-scored.
+eval-locomo:
+	go run ./eval -v -judge \
+		-strategies "naive_full_history,sliding_window,acgc" \
+		-external "locomo=$(EXTERNAL_DATA)/locomo10.json" \
+		-external-sample 20
 
 # --- Latency benchmarking (naive vs grpc Run) ---
 

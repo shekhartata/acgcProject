@@ -101,6 +101,52 @@ Output:
 | `multi_hop_synth_1` | multi_hop | Three facts spread out; probe requires synthesizing all three |
 | `deep_history_recall_1` | deep_history | Four decisions up front, then ~85 large filler Q/A pairs (~13-15k raw tokens, >2x the default budget). Purpose-built to exceed the token budget so `naive_full_history` (keeps oldest), `sliding_window` (keeps newest, drops the decisions), and `acgc` (compresses, keeps the decisions cheaply) visibly diverge on tokens and recall. |
 
+## External benchmarks (LongMemEval, LoCoMo)
+
+Besides the built-in scenarios above, the harness can load two published
+long-term-memory benchmarks through modular adapters in
+`eval/datasets/external/`. Adapters are pure data loaders: each benchmark
+instance (or conversation) becomes a regular `Scenario`, so the strategies,
+scoring, caching, and reporting pipeline is completely unchanged.
+
+| Source | Key | Mapping |
+|---|---|---|
+| [LongMemEval](https://github.com/xiaowu0162/LongMemEval) | `longmemeval` | One instance → one scenario: multi-session haystack flattened chronologically, session dates annotated inline, one judge-scored probe against the gold answer. Instances whose ID ends in `_abs` use an abstention rubric (correct = "not in the conversation"). |
+| [LoCoMo](https://github.com/snap-research/locomo) | `locomo` | One conversation → one scenario: speaker A maps to `user`, speaker B to `assistant`, every turn prefixed with the speaker's name, image turns replaced by their captions. All (or a sampled cap of) QA pairs become judge-scored probes; category 5 (adversarial) uses the abstention rubric. |
+
+Data files are **not vendored** (size + licensing). Fetch them once:
+
+```bash
+make eval-fetch-external          # downloads into eval/datasets/external/data/ (gitignored)
+```
+
+Then run:
+
+```bash
+make eval-longmemeval             # 20 sampled instances, judge-scored, 3 strategies
+make eval-locomo                  # 10 conversations, 20 sampled probes each
+
+# or hand-rolled:
+go run ./eval -v -judge \
+  -external "longmemeval=eval/datasets/external/data/longmemeval_s.json" \
+  -external-sample 10 -external-seed 42 \
+  -external-types "multi-session,temporal-reasoning"
+```
+
+### External flags
+
+| Flag | Default | Purpose |
+|---|---|---|
+| `-external` | (empty) | `name=path` pairs, comma-separated. Registered names: `longmemeval`, `locomo`. Requires `-judge` on live runs (all external probes are judge-scored). |
+| `-external-sample` | `20` | Cap per source: instances for LongMemEval, probes per conversation for LoCoMo. `0` = all. |
+| `-external-seed` | `42` | Seed for deterministic subsampling — the same seed always selects the same subset, keeping cache keys stable across runs. |
+| `-external-types` | (empty) | Filter by question type (LongMemEval: `single-session-user`, `multi-session`, `temporal-reasoning`, `knowledge-update`, ...) or category (LoCoMo: `single_hop`, `multi_hop`, `temporal`, `open_domain`, `adversarial`). |
+
+Cost warning: external instances are much larger than the built-in scenarios
+(LongMemEval-S is ~115k history tokens per instance before budgeting). Start
+with a small `-external-sample` and/or a `-budget-cap`, and remember every
+response is cached for free replay.
+
 ## Verdicts
 
 Verdicts describe a **candidate strategy vs the reference strategy** for a probe:

@@ -1,0 +1,27 @@
+[
+  {
+    "sample_id": "conv-1",
+    "conversation": {
+      "speaker_a": "Caroline",
+      "speaker_b": "Melanie",
+      "session_1_date_time": "1:00 pm on 8 May, 2023",
+      "session_1": [
+        {"speaker": "Caroline", "dia_id": "D1:1", "text": "Hey Melanie! I finally started my pottery class."},
+        {"speaker": "Melanie", "dia_id": "D1:2", "text": "That's wonderful, Caroline! What are you making first?"},
+        {"speaker": "Caroline", "dia_id": "D1:3", "text": "A small vase for my mom's birthday in June."}
+      ],
+      "session_2_date_time": "4:00 pm on 25 May, 2023",
+      "session_2": [
+        {"speaker": "Melanie", "dia_id": "D2:1", "text": "How's the vase coming along?"},
+        {"speaker": "Caroline", "dia_id": "D2:2", "text": "", "blip_caption": "a blue ceramic vase on a pottery wheel", "img_url": "http://example.com/vase.jpg"},
+        {"speaker": "Caroline", "dia_id": "D2:3", "text": "Just glazed it blue, her favorite color!"}
+      ]
+    },
+    "qa": [
+      {"question": "What is Caroline making in her pottery class?", "answer": "A vase for her mom's birthday", "evidence": ["D1:3"], "category": 4},
+      {"question": "When did Caroline start her pottery class?", "answer": "8 May, 2023", "evidence": ["D1:1"], "category": 2},
+      {"question": "What did Melanie make in her painting class?", "adversarial_answer": "Melanie never mentioned taking a painting class.", "category": 5},
+      {"question": "How many weeks passed between Caroline starting the class and glazing the vase?", "answer": 2.4, "evidence": ["D1:1", "D2:2"], "category": 1}
+    ]
+  }
+]
