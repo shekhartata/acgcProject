@@ -43,6 +43,9 @@ func GenerateWithRetry(ctx context.Context, client *llm.Client, messages []llm.C
 
 func isTransient(err error) bool {
 	msg := err.Error()
+	if strings.Contains(msg, "insufficient_quota") {
+		return false
+	}
 	for _, marker := range []string{
 		"status 429", "status 500", "status 502", "status 503", "status 504",
 		"timeout", "deadline exceeded", "connection reset", "EOF",

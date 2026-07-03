@@ -2,7 +2,7 @@ PROTO_DIR := proto
 API_DIR := api/proto
 BINARY := acgc
 
-.PHONY: proto build run test clean tidy lint mongo mongo-down mongo-logs mongo-shell stresstest eval eval-cached eval-judge eval-strategies eval-semantic eval-semantic-judge stresstest-semantic latency-bench eval-fetch-external eval-longmemeval eval-locomo
+.PHONY: proto build run test clean tidy lint mongo mongo-down mongo-logs mongo-shell stresstest eval eval-cached eval-judge eval-strategies eval-semantic eval-semantic-judge stresstest-semantic latency-bench eval-fetch-external eval-longmemeval eval-locomo eval-longmemeval-semantic eval-locomo-semantic
 
 # --- Build ---
 
@@ -119,6 +119,19 @@ eval-longmemeval:
 # LoCoMo: all 10 conversations, 20 sampled probes each, judge-scored.
 eval-locomo:
 	go run ./eval -v -judge \
+		-strategies "naive_full_history,sliding_window,acgc" \
+		-external "locomo=$(EXTERNAL_DATA)/locomo10.json" \
+		-external-sample 20
+
+# Same as above with HNSW semantic scoring in the ACGC pipeline.
+eval-longmemeval-semantic:
+	go run ./eval -v -judge -semantic \
+		-strategies "naive_full_history,sliding_window,acgc" \
+		-external "longmemeval=$(EXTERNAL_DATA)/longmemeval_s_cleaned.json" \
+		-external-sample 20
+
+eval-locomo-semantic:
+	go run ./eval -v -judge -semantic \
 		-strategies "naive_full_history,sliding_window,acgc" \
 		-external "locomo=$(EXTERNAL_DATA)/locomo10.json" \
 		-external-sample 20

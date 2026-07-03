@@ -145,6 +145,9 @@ func main() {
 		// built-in scenario report (report.md/results.json) is untouched.
 		allScenarios = ext
 		reportPrefix = "external_" + strings.Join(sourceNames, "_")
+		if acgcCfg.Embedder != nil {
+			reportPrefix += "_semantic"
+		}
 	}
 
 	scenarios := selectScenarios(*scenariosFlag, allScenarios)
@@ -365,6 +368,11 @@ func buildPipelines(kinds []harness.PipelineKind, llmCfg harness.LLMConfig, acgc
 			continue
 		}
 		pipelines = append(pipelines, harness.NewStrategyPipeline(strat, llmCfg, acgcCfg, counter))
+		if k == harness.PipelineACGC && acgcCfg.Embedder != nil {
+			if sp, ok := pipelines[len(pipelines)-1].(*harness.StrategyPipeline); ok {
+				sp.SetCacheKeySuffix("semantic")
+			}
+		}
 	}
 	return pipelines
 }
