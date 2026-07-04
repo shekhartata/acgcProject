@@ -46,6 +46,7 @@ A Go sidecar runtime that sits between an AI agent and its LLM, intercepting eve
   - [Stress test suite (no API key)](#stress-test-suite-no-api-key)
   - [Latency benchmarking (`acgc-latencybench`)](#latency-benchmarking-acgc-latencybench)
   - [Quality evaluation (LLM harness)](#quality-evaluation-llm-harness)
+  - [External benchmark evaluation](#external-benchmark-evaluation)
 - [Project Structure](#project-structure)
 - [Current Status vs Roadmap](#current-status-vs-roadmap)
 
@@ -549,13 +550,14 @@ Copy `.env.example` to `.env` and set what your path needs. **Minimum for a live
 
 ## Benchmarks and Evaluation
 
-Three harnesses answer three different questions. None are required to *use* ACGC — they justify it:
+Four harnesses answer four different questions. None are required to *use* ACGC — they justify it:
 
 | Question | Harness | Needs MongoDB | Needs API key | Cost |
 |---|---|---|---|---|
 | Does the pipeline work and save tokens? | [Stress test suite](#stress-test-suite-no-api-key) | No | No | Free |
 | How much wall-clock does ACGC add per call? | [Latency bench](#latency-benchmarking-acgc-latencybench) | Yes (live server) | Yes | LLM calls |
-| Does answer **quality** hold up vs naive context strategies? | [Quality evaluation](#quality-evaluation-llm-harness) | No (in-process) | Yes (+ embeddings with `-semantic`) | LLM + judge calls |
+| Does answer **quality** hold up on hand-written scenarios? | [Quality evaluation](#quality-evaluation-llm-harness) | No (in-process) | Yes (+ embeddings with `-semantic`) | LLM + judge calls |
+| Does ACGC hold up on **published long-memory benchmarks**? | [External benchmark evaluation](#external-benchmark-evaluation) | No (in-process) | Yes (+ embeddings with `-semantic`) | LLM + judge calls (larger) |
 
 ### Stress test suite (no API key)
 
@@ -753,14 +755,32 @@ Two reasoning-heavy probes (`constraint_adherence_1`, `multi_hop_synth_1`) previ
 
 Artifacts for this snapshot: regenerate with the command above (add `-max-tokens 10000` for the reasoning-heavy probes), or inspect **`eval/results/report.md`** + **`eval/results/results.json`**.
 
-#### External benchmarks — semantic runs (**2026-07-04**)
+### External benchmark evaluation
 
-Same harness as above (`-semantic -judge`, three strategies, `gpt-5` answer + judge, `text-embedding-3-small` embeddings). External adapters live in `eval/datasets/external/`; reports are prefixed separately under **`eval/results/`**.
+The built-in quality harness uses small, hand-written scenarios. **External benchmarks** run the same three-strategy comparison against **published long-memory datasets** — real multi-session chat logs and QA probes — so the numbers reflect how ACGC behaves on workloads closer to production agents.
+
+#### What it tests
+
+We ask a simple question for each probe: **can ACGC answer a memory question as well as (or better than) sending the full chat history, while using fewer tokens?** An LLM judge scores every answer 0–5. All three strategies share the same model, budget, tokenizer, and judge; semantic retrieval is on (`-semantic`: embeddings + archive HNSW).
+
+| Benchmark | What it simulates | Our recorded run |
+|---|---|---|
+| **[LongMemEval](https://github.com/xiaowu0162/LongMemEval)** | Many chat sessions over weeks; one question per instance (“what did I say about X last month?”) | 20 sampled instances |
+| **[LoCoMo](https://github.com/snap-research/locomo)** | Two-speaker long dialogues; many QA probes per conversation (factual, temporal, multi-hop, adversarial) | 5 conversations, 100 probes |
+
+Strategies compared (same as built-in eval):
+
+- **`naive_full_history`** — reference; stuff as much history as fits the budget.
+- **`sliding_window`** — keep only the most recent turns.
+- **`acgc`** — full ACGC stack with GC, compiler, and semantic archive retrieval.
+
+#### How to reproduce
 
 ```bash
-make eval-fetch-external
-make eval-longmemeval-semantic
-make eval-locomo-semantic
+make eval-fetch-external          # downloads datasets (gitignored under eval/datasets/external/data/)
+make eval-longmemeval-semantic    # LongMemEval, 20 instances
+make eval-locomo-semantic         # LoCoMo, 10 convs × 20 probes
+
 # LoCoMo subset (5 conversations):
 go run ./eval -v -judge -semantic \
   -strategies "naive_full_history,sliding_window,acgc" \
@@ -769,38 +789,35 @@ go run ./eval -v -judge -semantic \
   -scenarios "locomo_conv-26,locomo_conv-30,locomo_conv-41,locomo_conv-42,locomo_conv-43"
 ```
 
-##### LongMemEval (20 sampled instances)
+Reports land in **`eval/results/`** with an `external_<benchmark>_semantic_` prefix (e.g. `external_longmemeval_semantic_report.md`). Adapter details and flags: **`eval/README.md`**.
 
-| Strategy | Avg quality (/5.0) | Avg prompt tokens | Token red vs ref | Verdicts vs naive |
+#### Recorded semantic runs (**2026-07-04**)
+
+Configuration: **`gpt-5`** for answer + judge, **`text-embedding-3-small`** embeddings, semantic weight **0.20**, **6000-token** budget, three strategies.
+
+**LongMemEval (20 instances)**
+
+| Strategy | Avg quality (/5.0) | Avg prompt tokens | Token savings vs naive | Verdicts vs naive |
 |---|---:|---:|---:|---|
-| `naive_full_history` (ref) | 2.20 | 6235 | 0.0% | — |
+| `naive_full_history` (ref) | 2.20 | 6235 | — | — |
 | `sliding_window` | 2.30 | 6214 | ~0% | — |
 | **`acgc`** | **3.00** | **2473** | **60.3%** | 30 WIN, 9 TIE, 0 LOSS |
 
-LongMemEval histories are long and noisy across many sessions — sliding window barely helps because recency ≠ relevance. **ACGC + semantic retrieval** cuts prompt size by ~60% **and** raises quality (+0.80 vs naive, +0.55 vs heuristic-only ACGC on the same 20 instances). Zero quality regressions.
+**LoCoMo (5 conversations, 100 probes)** — `conv-26`, `30`, `41`, `42`, `43`
 
-Artifacts: **`eval/results/external_longmemeval_semantic_report.md`** + **`..._results.json`**.
-
-##### LoCoMo (5 conversations, 100 probes)
-
-Sampled conversations: `conv-26`, `30`, `41`, `42`, `43` (20 judge-scored probes each).
-
-| Strategy | Avg quality (/5.0) | Avg prompt tokens | Token red vs ref | Verdicts vs naive |
+| Strategy | Avg quality (/5.0) | Avg prompt tokens | Token savings vs naive | Verdicts vs naive |
 |---|---:|---:|---:|---|
-| `naive_full_history` (ref) | 2.78 | 6734 | 0.0% | — |
+| `naive_full_history` (ref) | 2.78 | 6734 | — | — |
 | **`sliding_window`** | **3.27** | 6761 | ~0% | — |
 | `acgc` | 3.13 | 6123 | 9.1% | 130 WIN, 36 TIE, 34 LOSS |
 
-LoCoMo dialogue is **dense** — most turns carry signal and histories already sit near the 6k budget (~6.7k naive). **Sliding window wins on quality** because recency matches the benchmark structure. ACGC still beats naive (+0.35 quality, ~9% token savings) but does not beat sliding. **Temporal probes** are the main ACGC weakness (session-date annotations and old turns can be dropped by GC/compiler).
+Artifacts: **`eval/results/external_longmemeval_semantic_report.md`**, **`eval/results/external_locomo_semantic_report.md`** (+ matching `..._results.json`).
 
-Artifacts: **`eval/results/external_locomo_semantic_report.md`** + **`..._results.json`**.
+#### Takeaways
 
-##### Cross-benchmark takeaway
-
-| Benchmark shape | Best strategy | Why |
-|---|---|---|
-| Long, noisy, multi-session (LongMemEval) | **ACGC + semantic** | High noise ratio; archive retrieval finds the right old session |
-| Dense, recency-heavy chat (LoCoMo) | **Sliding window** (quality) / **ACGC** (modest savings) | History already fits ~budget; recent turns hold the answer |
+- **LongMemEval is ACGC's home turf.** Histories are long and spread across many sessions — "most recent turns" (sliding window) usually miss the answer. Semantic ACGC pulls the right old content back from the archive and wins on **both** quality (+0.80 vs naive) and cost (~60% fewer tokens), with zero quality regressions.
+- **LoCoMo is a different beast.** Dialogue is dense; most turns matter and the history already sits near the token budget (~6.7k naive vs 6k budget). **Recent context often is the answer**, so sliding window scores highest (3.27). ACGC still beats naive (+0.35 quality, ~9% savings) but not sliding. **Temporal questions** are the main weak spot — session-date annotations and older turns can be compressed away.
+- **Rule of thumb:** use **ACGC + semantic** for agents with long, multi-session memory (support tickets, research assistants, personal memory). For **short, dense chats** already near budget, **sliding window** may win on quality until temporal handling improves — or run both and pick by workload.
 
 ---
 
