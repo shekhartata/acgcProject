@@ -134,7 +134,7 @@ Full guide: [Integrating ACGC into your application](#integrating-acgc-into-your
 
 ### Path 4 — Benchmark it
 
-Three harnesses answer three different questions — see [Benchmarks and Evaluation](#benchmarks-and-evaluation) for the orientation table, commands, and recorded numbers. You do **not** need to run any of them to use ACGC; they exist to justify it.
+Four harnesses answer four different questions — see [Benchmarks and Evaluation](#benchmarks-and-evaluation) for the orientation table, commands, and recorded numbers. You do **not** need to run any of them to use ACGC; they exist to justify it.
 
 ---
 
