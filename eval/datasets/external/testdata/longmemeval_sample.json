@@ -1,0 +1,48 @@
+[
+  {
+    "question_id": "lme_fixture_1",
+    "question_type": "multi-session",
+    "question": "What breed is my dog?",
+    "answer": "a beagle",
+    "question_date": "2023/05/30 (Tue) 18:00",
+    "haystack_dates": ["2023/05/20 (Sat) 10:00", "2023/05/25 (Thu) 14:30"],
+    "haystack_sessions": [
+      [
+        {"role": "user", "content": "I just adopted a dog! He's a beagle named Rufus."},
+        {"role": "assistant", "content": "Congratulations on adopting Rufus!"}
+      ],
+      [
+        {"role": "user", "content": "Rufus chewed my slippers today."},
+        {"role": "assistant", "content": "Beagles are known for being energetic chewers."}
+      ]
+    ]
+  },
+  {
+    "question_id": "lme_fixture_2_abs",
+    "question_type": "knowledge-update",
+    "question": "What color is my car?",
+    "answer": "The user never mentioned a car.",
+    "question_date": "2023/06/01 (Thu) 09:00",
+    "haystack_dates": ["2023/05/28 (Sun) 11:00"],
+    "haystack_sessions": [
+      [
+        {"role": "user", "content": "I ride my bike to work every day."},
+        {"role": "assistant", "content": "That's a healthy commute!"}
+      ]
+    ]
+  },
+  {
+    "question_id": "lme_fixture_3",
+    "question_type": "temporal-reasoning",
+    "question": "How many days after adopting Rufus did I mention the slippers?",
+    "answer": 5,
+    "question_date": "2023/06/02 (Fri) 12:00",
+    "haystack_dates": ["2023/05/20 (Sat) 10:00"],
+    "haystack_sessions": [
+      [
+        {"role": "user", "content": "Quick note: adopted Rufus on May 20th."},
+        {"role": "assistant", "content": "Noted."}
+      ]
+    ]
+  }
+]

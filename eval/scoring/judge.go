@@ -115,8 +115,9 @@ const (
 )
 
 // callJudge issues one judge generation. Surfaces FinishReason for diagnostics.
+// Transient provider failures (429/5xx/timeouts) are retried with backoff.
 func (j *JudgeClient) callJudge(ctx context.Context, userMsg string) (*llm.GenerateResult, error) {
-	return j.client.Generate(ctx, []llm.ChatMessage{
+	return harness.GenerateWithRetry(ctx, j.client, []llm.ChatMessage{
 		{Role: "system", Content: judgeSystemPrompt},
 		{Role: "user", Content: userMsg},
 	}, 0, judgeMaxTokensFirst)
@@ -125,7 +126,7 @@ func (j *JudgeClient) callJudge(ctx context.Context, userMsg string) (*llm.Gener
 // callJudgeRetry issues a retry with a larger token budget — protects against
 // "length"-finish failures on reasoning models that ate the first budget.
 func (j *JudgeClient) callJudgeRetry(ctx context.Context, userMsg string) (*llm.GenerateResult, error) {
-	return j.client.Generate(ctx, []llm.ChatMessage{
+	return harness.GenerateWithRetry(ctx, j.client, []llm.ChatMessage{
 		{Role: "system", Content: judgeSystemPrompt},
 		{Role: "user", Content: userMsg},
 	}, 0, judgeMaxTokensRetry)

@@ -15,12 +15,13 @@ import (
 // records real token/latency metrics. Every strategy goes through the exact
 // same LLM path so results are directly comparable.
 type StrategyPipeline struct {
-	strategy    ContextStrategy
-	cfg         LLMConfig
-	acgc        ACGCConfig
-	counter     tokenizer.TokenCounter
-	client      *llm.Client
-	tokenBudget int
+	strategy       ContextStrategy
+	cfg            LLMConfig
+	acgc           ACGCConfig
+	counter        tokenizer.TokenCounter
+	client         *llm.Client
+	tokenBudget    int
+	cacheKeySuffix string
 }
 
 // NewStrategyPipeline wires a ContextStrategy into a runnable pipeline.
@@ -42,6 +43,11 @@ func NewStrategyPipeline(strategy ContextStrategy, cfg LLMConfig, acgcCfg ACGCCo
 func (p *StrategyPipeline) Strategy() ContextStrategy { return p.strategy }
 
 func (p *StrategyPipeline) Kind() PipelineKind { return p.strategy.Name() }
+
+func (p *StrategyPipeline) CacheKeySuffix() string { return p.cacheKeySuffix }
+
+// SetCacheKeySuffix tags cache entries for this pipeline (e.g. "semantic").
+func (p *StrategyPipeline) SetCacheKeySuffix(s string) { p.cacheKeySuffix = s }
 
 func (p *StrategyPipeline) Answer(ctx context.Context, history []datasets.Turn, probe datasets.Probe) (*ProbeResult, error) {
 	sessionID := fmt.Sprintf("eval_%d", time.Now().UnixNano())
@@ -78,7 +84,7 @@ func (p *StrategyPipeline) Answer(ctx context.Context, history []datasets.Turn, 
 	messages := assembleMessages(in.SystemPrompt, out.FinalPrompt, probe.Question)
 
 	start := time.Now()
-	result, genErr := p.client.Generate(ctx, messages, p.cfg.Temperature, p.cfg.MaxTokens)
+	result, genErr := GenerateWithRetry(ctx, p.client, messages, p.cfg.Temperature, p.cfg.MaxTokens)
 	pr.LatencyMs = time.Since(start).Milliseconds()
 
 	if genErr != nil {

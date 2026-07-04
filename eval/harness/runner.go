@@ -99,7 +99,12 @@ func (r *Runner) logProbe(scenarioID, probeID string, runs map[PipelineKind]Scen
 }
 
 func (r *Runner) answer(ctx context.Context, p Pipeline, scenarioID string, history []datasets.Turn, probe datasets.Probe) (*ProbeResult, error) {
-	if cached, ok := r.cache.Get(scenarioID, probe.ID, p.Kind()); ok {
+	cacheSuffix := ""
+	if cp, ok := p.(CachingPipeline); ok {
+		cacheSuffix = cp.CacheKeySuffix()
+	}
+
+	if cached, ok := r.cache.Get(scenarioID, probe.ID, p.Kind(), cacheSuffix); ok {
 		cached.ScenarioID = scenarioID
 		return cached, nil
 	}
@@ -123,6 +128,7 @@ func (r *Runner) answer(ctx context.Context, p Pipeline, scenarioID string, hist
 		return result, err
 	}
 	result.ScenarioID = scenarioID
+	result.CacheKeySuffix = cacheSuffix
 
 	r.tokensSpent += result.PromptTokens + result.OutputTokens
 

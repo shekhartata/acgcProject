@@ -17,6 +17,9 @@ stresstest/testdata/
 # Eval runtime cache (LLM response cache, regenerable, not source)
 eval/cache/
 
+# External benchmark data (fetched via eval/datasets/external/fetch.sh)
+eval/datasets/external/data/
+
 # Go
 vendor/
 *.test

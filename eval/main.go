@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/chandrashekhartata/acgc/eval/datasets"
+	"github.com/chandrashekhartata/acgc/eval/datasets/external"
 	"github.com/chandrashekhartata/acgc/eval/harness"
 	"github.com/chandrashekhartata/acgc/eval/report"
 	"github.com/chandrashekhartata/acgc/eval/scoring"
@@ -36,6 +37,14 @@ func main() {
 			"comma-separated context strategies to compare (naive_full_history, sliding_window, acgc); the first is the reference")
 		maxTokens = flag.Int("max-tokens", 6000,
 			"max completion tokens for probe answers (reasoning models spend part of this on hidden reasoning)")
+		externalArg = flag.String("external", "",
+			"external benchmark sources as name=path pairs, comma-separated (e.g. \"longmemeval=eval/datasets/external/data/longmemeval_s.json,locomo=.../locomo10.json\")")
+		externalSample = flag.Int("external-sample", 20,
+			"max instances per external source (LongMemEval) or probes per conversation (LoCoMo); 0 = all")
+		externalSeed = flag.Int64("external-seed", 42,
+			"seed for deterministic external-benchmark subsampling (keeps cache keys stable)")
+		externalTypes = flag.String("external-types", "",
+			"comma-separated question-type filter for external sources (e.g. \"multi-session,temporal-reasoning\" or \"single_hop,adversarial\")")
 	)
 	flag.Parse()
 
@@ -113,7 +122,35 @@ func main() {
 		Verbose:   *verbose,
 	})
 
-	scenarios := selectScenarios(*scenariosFlag)
+	allScenarios := datasets.All()
+	// External runs write to prefixed files (external_<sources>_report.md)
+	// so they never clobber the built-in scenario report.
+	reportPrefix := ""
+	if *externalArg != "" {
+		// External probes are judge-scored (free-form gold answers), so a
+		// live run without -judge would skip every probe. Cache-only parse
+		// validation is still allowed.
+		if !*useJudge && !*cacheOnly {
+			log.Fatal("-external requires -judge (external benchmark probes are judge-scored)")
+		}
+		ext, sourceNames, err := loadExternalScenarios(*externalArg, external.Options{
+			Sample: *externalSample,
+			Seed:   *externalSeed,
+			Types:  splitNonEmpty(*externalTypes),
+		})
+		if err != nil {
+			log.Fatalf("external benchmarks: %v", err)
+		}
+		// An external run evaluates ONLY the external scenarios; the
+		// built-in scenario report (report.md/results.json) is untouched.
+		allScenarios = ext
+		reportPrefix = "external_" + strings.Join(sourceNames, "_")
+		if acgcCfg.Embedder != nil {
+			reportPrefix += "_semantic"
+		}
+	}
+
+	scenarios := selectScenarios(*scenariosFlag, allScenarios)
 	if len(scenarios) == 0 {
 		log.Fatal("no scenarios selected")
 	}
@@ -227,13 +264,13 @@ func main() {
 		ResponsesByStrategy: responses,
 	}
 
-	if err := report.WriteAll(*resultsDir, bundle); err != nil {
+	if err := report.WriteAll(*resultsDir, reportPrefix, bundle); err != nil {
 		log.Fatalf("write report: %v", err)
 	}
 
 	printSummary(strategyAggs, agg, runner.TokensSpent())
-	fmt.Printf("\n  Report written to: %s/report.md\n", *resultsDir)
-	fmt.Printf("  Raw JSON: %s/results.json\n", *resultsDir)
+	fmt.Printf("\n  Report written to: %s/%s\n", *resultsDir, report.FileName(reportPrefix, "report.md"))
+	fmt.Printf("  Raw JSON: %s/%s\n", *resultsDir, report.FileName(reportPrefix, "results.json"))
 }
 
 // scoreAllStrategies scores every strategy for a probe. Deterministic probes
@@ -331,6 +368,11 @@ func buildPipelines(kinds []harness.PipelineKind, llmCfg harness.LLMConfig, acgc
 			continue
 		}
 		pipelines = append(pipelines, harness.NewStrategyPipeline(strat, llmCfg, acgcCfg, counter))
+		if k == harness.PipelineACGC && acgcCfg.Embedder != nil {
+			if sp, ok := pipelines[len(pipelines)-1].(*harness.StrategyPipeline); ok {
+				sp.SetCacheKeySuffix("semantic")
+			}
+		}
 	}
 	return pipelines
 }
@@ -343,8 +385,7 @@ func strategyList(kinds []harness.PipelineKind) string {
 	return strings.Join(parts, ", ")
 }
 
-func selectScenarios(filter string) []datasets.Scenario {
-	all := datasets.All()
+func selectScenarios(filter string, all []datasets.Scenario) []datasets.Scenario {
 	if filter == "" {
 		return all
 	}
@@ -356,6 +397,48 @@ func selectScenarios(filter string) []datasets.Scenario {
 	for _, s := range all {
 		if wanted[s.ID] {
 			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// loadExternalScenarios parses the -external flag ("name=path,name=path")
+// and loads scenarios from each registered adapter. It also returns the
+// source names in flag order, used to prefix the report files.
+func loadExternalScenarios(arg string, opts external.Options) ([]datasets.Scenario, []string, error) {
+	var out []datasets.Scenario
+	var names []string
+	for _, pair := range strings.Split(arg, ",") {
+		pair = strings.TrimSpace(pair)
+		if pair == "" {
+			continue
+		}
+		name, path, ok := strings.Cut(pair, "=")
+		if !ok {
+			return nil, nil, fmt.Errorf("bad -external entry %q (want name=path)", pair)
+		}
+		name = strings.TrimSpace(name)
+		src, found := external.Lookup(name)
+		if !found {
+			return nil, nil, fmt.Errorf("unknown external source %q (available: %s)",
+				name, strings.Join(external.Names(), ", "))
+		}
+		scenarios, err := src.Load(strings.TrimSpace(path), opts)
+		if err != nil {
+			return nil, nil, err
+		}
+		log.Printf("external: loaded %d scenarios from %s (%s)", len(scenarios), name, path)
+		out = append(out, scenarios...)
+		names = append(names, name)
+	}
+	return out, names, nil
+}
+
+func splitNonEmpty(s string) []string {
+	var out []string
+	for _, part := range strings.Split(s, ",") {
+		if p := strings.TrimSpace(part); p != "" {
+			out = append(out, p)
 		}
 	}
 	return out

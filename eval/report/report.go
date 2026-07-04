@@ -35,14 +35,25 @@ type Bundle struct {
 }
 
 // WriteAll writes both a JSON dump and a human-readable markdown report.
-func WriteAll(dir string, b Bundle) error {
+// A non-empty prefix produces "<prefix>_results.json" / "<prefix>_report.md"
+// so runs against different datasets (e.g. external benchmarks) don't
+// overwrite the built-in scenario report.
+func WriteAll(dir, prefix string, b Bundle) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	if err := writeJSON(filepath.Join(dir, "results.json"), b); err != nil {
+	if err := writeJSON(filepath.Join(dir, FileName(prefix, "results.json")), b); err != nil {
 		return err
 	}
-	return writeMarkdown(filepath.Join(dir, "report.md"), b)
+	return writeMarkdown(filepath.Join(dir, FileName(prefix, "report.md")), b)
+}
+
+// FileName joins an optional prefix with a base report filename.
+func FileName(prefix, base string) string {
+	if prefix == "" {
+		return base
+	}
+	return prefix + "_" + base
 }
 
 func writeJSON(path string, b Bundle) error {

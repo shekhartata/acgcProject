@@ -55,7 +55,7 @@ func (c *Cache) load() error {
 		if err := json.Unmarshal(scanner.Bytes(), &r); err != nil {
 			continue
 		}
-		c.entries[key(r.ScenarioID, r.ProbeID, r.Pipeline)] = &r
+		c.entries[key(r.ScenarioID, r.ProbeID, r.Pipeline, r.CacheKeySuffix)] = &r
 	}
 	return scanner.Err()
 }
@@ -67,10 +67,10 @@ func (c *Cache) filepath() string {
 
 // Get returns a cached response if present. The returned ProbeResult has
 // Cached=true set so the runner can avoid double-counting tokens spent.
-func (c *Cache) Get(scenarioID, probeID string, pipeline PipelineKind) (*ProbeResult, bool) {
+func (c *Cache) Get(scenarioID, probeID string, pipeline PipelineKind, cacheSuffix string) (*ProbeResult, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	r, ok := c.entries[key(scenarioID, probeID, pipeline)]
+	r, ok := c.entries[key(scenarioID, probeID, pipeline, cacheSuffix)]
 	if !ok {
 		return nil, false
 	}
@@ -84,7 +84,7 @@ func (c *Cache) Put(r *ProbeResult) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	c.entries[key(r.ScenarioID, r.ProbeID, r.Pipeline)] = r
+	c.entries[key(r.ScenarioID, r.ProbeID, r.Pipeline, r.CacheKeySuffix)] = r
 
 	f, err := os.OpenFile(c.filepath(), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
@@ -97,15 +97,19 @@ func (c *Cache) Put(r *ProbeResult) error {
 }
 
 // Has is a cheap presence check.
-func (c *Cache) Has(scenarioID, probeID string, pipeline PipelineKind) bool {
+func (c *Cache) Has(scenarioID, probeID string, pipeline PipelineKind, cacheSuffix string) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	_, ok := c.entries[key(scenarioID, probeID, pipeline)]
+	_, ok := c.entries[key(scenarioID, probeID, pipeline, cacheSuffix)]
 	return ok
 }
 
-func key(scenarioID, probeID string, p PipelineKind) string {
-	return scenarioID + "::" + probeID + "::" + string(p)
+func key(scenarioID, probeID string, p PipelineKind, cacheSuffix string) string {
+	k := scenarioID + "::" + probeID + "::" + string(p)
+	if cacheSuffix != "" {
+		k += "::" + cacheSuffix
+	}
+	return k
 }
 
 func sanitize(s string) string {

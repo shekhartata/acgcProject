@@ -47,16 +47,17 @@ func ParseStrategyKind(s string) (PipelineKind, bool) {
 // ProbeResult is the LLM's answer to a single probe question, including
 // real token counts measured from the API response.
 type ProbeResult struct {
-	ScenarioID   string       `json:"scenario_id"`
-	ProbeID      string       `json:"probe_id"`
-	Pipeline     PipelineKind `json:"pipeline"`
-	Question     string       `json:"question"`
-	Response     string       `json:"response"`
-	PromptTokens int          `json:"prompt_tokens"`
-	OutputTokens int          `json:"output_tokens"`
-	LatencyMs    int64        `json:"latency_ms"`
-	Cached       bool         `json:"cached"`
-	Error        string       `json:"error,omitempty"`
+	ScenarioID     string       `json:"scenario_id"`
+	ProbeID        string       `json:"probe_id"`
+	Pipeline       PipelineKind `json:"pipeline"`
+	CacheKeySuffix string       `json:"cache_key_suffix,omitempty"`
+	Question       string       `json:"question"`
+	Response       string       `json:"response"`
+	PromptTokens   int          `json:"prompt_tokens"`
+	OutputTokens   int          `json:"output_tokens"`
+	LatencyMs      int64        `json:"latency_ms"`
+	Cached         bool         `json:"cached"`
+	Error          string       `json:"error,omitempty"`
 
 	// Context-assembly accounting from the strategy (pre-wire estimates using
 	// the model-aware tokenizer). PromptTokens above remains the ground-truth
@@ -84,6 +85,14 @@ type ScenarioRun struct {
 type Pipeline interface {
 	Kind() PipelineKind
 	Answer(ctx context.Context, history []datasets.Turn, probe datasets.Probe) (*ProbeResult, error)
+}
+
+// CachingPipeline optionally distinguishes cache entries beyond Kind() — e.g.
+// acgc with semantic scoring uses a different suffix so heuristic-only cached
+// responses are not replayed when -semantic is enabled.
+type CachingPipeline interface {
+	Pipeline
+	CacheKeySuffix() string
 }
 
 // LLMConfig is the minimal config the eval needs to talk to a real LLM.
