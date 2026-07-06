@@ -87,6 +87,8 @@ message PromptStats {
   int32 active_nodes = 7;
   int32 compressed_nodes = 8;
   int32 archived_nodes = 9;
+  // Provider-reported prefix cache hits (OpenAI: prompt_tokens_details.cached_tokens). 0 when not reported.
+  int32 cached_prompt_tokens = 10;
 }
 
 // ---------------------------------------------------------------------------

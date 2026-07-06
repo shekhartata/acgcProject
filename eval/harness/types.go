@@ -53,9 +53,10 @@ type ProbeResult struct {
 	CacheKeySuffix string       `json:"cache_key_suffix,omitempty"`
 	Question       string       `json:"question"`
 	Response       string       `json:"response"`
-	PromptTokens   int          `json:"prompt_tokens"`
-	OutputTokens   int          `json:"output_tokens"`
-	LatencyMs      int64        `json:"latency_ms"`
+	PromptTokens       int          `json:"prompt_tokens"`
+	OutputTokens       int          `json:"output_tokens"`
+	CachedPromptTokens int          `json:"cached_prompt_tokens,omitempty"`
+	LatencyMs          int64        `json:"latency_ms"`
 	Cached         bool         `json:"cached"`
 	Error          string       `json:"error,omitempty"`
 

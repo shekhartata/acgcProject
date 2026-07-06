@@ -60,6 +60,9 @@ type chatResponse struct {
 		PromptTokens     int `json:"prompt_tokens"`
 		CompletionTokens int `json:"completion_tokens"`
 		TotalTokens      int `json:"total_tokens"`
+		PromptTokensDetails struct {
+			CachedTokens int `json:"cached_tokens"`
+		} `json:"prompt_tokens_details"`
 	} `json:"usage"`
 }
 
@@ -67,6 +70,9 @@ type GenerateResult struct {
 	Content          string
 	PromptTokens     int
 	CompletionTokens int
+	// CachedPromptTokens is populated when the provider reports prefix cache hits
+	// (OpenAI: usage.prompt_tokens_details.cached_tokens). Zero when omitted.
+	CachedPromptTokens int
 	// FinishReason is the provider-reported termination reason, e.g. "stop",
 	// "length", "content_filter". Useful when Content is empty (a reasoning
 	// model that exhausted MaxTokens on hidden reasoning will report "length").
@@ -141,9 +147,10 @@ func (c *Client) Generate(ctx context.Context, messages []ChatMessage, temperatu
 	}
 
 	return &GenerateResult{
-		Content:          chatResp.Choices[0].Message.Content,
-		PromptTokens:     chatResp.Usage.PromptTokens,
-		CompletionTokens: chatResp.Usage.CompletionTokens,
-		FinishReason:     chatResp.Choices[0].FinishReason,
+		Content:            chatResp.Choices[0].Message.Content,
+		PromptTokens:       chatResp.Usage.PromptTokens,
+		CompletionTokens:   chatResp.Usage.CompletionTokens,
+		CachedPromptTokens: chatResp.Usage.PromptTokensDetails.CachedTokens,
+		FinishReason:       chatResp.Choices[0].FinishReason,
 	}, nil
 }

@@ -30,6 +30,8 @@ type ACGCConfig struct {
 	SemanticWeight float64
 	TopKAtCompile  int
 	HNSWConfig     vectorindex.Config
+	// CacheStableRender reorders selected nodes into stable turn order for provider prefix caching.
+	CacheStableRender bool
 }
 
 func DefaultACGCConfig() ACGCConfig {

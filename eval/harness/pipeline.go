@@ -94,5 +94,6 @@ func (p *StrategyPipeline) Answer(ctx context.Context, history []datasets.Turn, 
 	pr.Response = result.Content
 	pr.PromptTokens = result.PromptTokens
 	pr.OutputTokens = result.CompletionTokens
+	pr.CachedPromptTokens = result.CachedPromptTokens
 	return pr, nil
 }

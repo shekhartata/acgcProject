@@ -114,16 +114,18 @@ func (s *Server) Run(ctx context.Context, req *pb.RunRequest) (*pb.RunResponse, 
 		Payload:    result.Content,
 		TokenCount: result.CompletionTokens,
 		Metadata: map[string]string{
-			"prompt_tokens":     fmt.Sprintf("%d", result.PromptTokens),
-			"completion_tokens": fmt.Sprintf("%d", result.CompletionTokens),
+			"prompt_tokens":        fmt.Sprintf("%d", result.PromptTokens),
+			"completion_tokens":    fmt.Sprintf("%d", result.CompletionTokens),
+			"cached_prompt_tokens": fmt.Sprintf("%d", result.CachedPromptTokens),
 		},
 		CreatedAt: time.Now(),
 	}
 	s.sessions.EnqueueEvent(sessionID, responseEvent)
 
 	latencyMs := float64(time.Since(start).Milliseconds())
-	log.Printf("gateway: run completed for %s in %.0fms (original: %d tokens, compiled: %d tokens)",
-		sessionID, latencyMs, compiled.OriginalTokenCount, compiled.CompiledTokenCount)
+	log.Printf("gateway: run completed for %s in %.0fms (original: %d tokens, compiled: %d tokens, cached: %d, stable_render: %t)",
+		sessionID, latencyMs, compiled.OriginalTokenCount, compiled.CompiledTokenCount,
+		result.CachedPromptTokens, compiled.CacheStableRender)
 
 	tokensSaved := compiled.OriginalTokenCount - compiled.CompiledTokenCount
 	reductionPct := float64(0)
@@ -145,6 +147,7 @@ func (s *Server) Run(ctx context.Context, req *pb.RunRequest) (*pb.RunResponse, 
 			ActiveNodes:        int32(activeNodes),
 			CompressedNodes:    int32(compressedNodes),
 			ArchivedNodes:      int32(archivedNodes),
+			CachedPromptTokens: int32(result.CachedPromptTokens),
 		},
 	}
 

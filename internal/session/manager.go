@@ -51,7 +51,8 @@ type Manager struct {
 	archiveTopK    int
 	hnswConfig     vectorindex.Config
 
-	latencyBreakdown bool
+	latencyBreakdown  bool
+	cacheStableRender bool
 }
 
 type ManagerConfig struct {
@@ -74,7 +75,8 @@ type ManagerConfig struct {
 	ArchiveTopKAtCompile int
 	HNSWConfig           vectorindex.Config
 
-	LatencyBreakdown bool
+	LatencyBreakdown  bool
+	CacheStableRender bool
 }
 
 func NewManager(cfg ManagerConfig) *Manager {
@@ -105,8 +107,17 @@ func NewManager(cfg ManagerConfig) *Manager {
 		topKAtCompile:    topK,
 		archiveTopK:      archK,
 		hnswConfig:       cfg.HNSWConfig,
-		latencyBreakdown: cfg.LatencyBreakdown,
+		latencyBreakdown:  cfg.LatencyBreakdown,
+		cacheStableRender: cfg.CacheStableRender,
 	}
+}
+
+func (m *Manager) newCompiler() *compiler.Compiler {
+	comp := compiler.NewCompilerWithCounter(m.compilerBudget, m.tokenCounter)
+	if m.cacheStableRender {
+		comp.WithCacheStableRender(true)
+	}
+	return comp
 }
 
 func (m *Manager) semanticEnabled() bool {
@@ -222,7 +233,7 @@ func (m *Manager) CompilePrompt(sessionID, taskID, userMessage, systemPrompt str
 	}
 
 	activeNodes := state.Tree.GetActiveNodes()
-	comp := compiler.NewCompilerWithCounter(m.compilerBudget, m.tokenCounter)
+	comp := m.newCompiler()
 
 	// Heuristic-only fast path: no embedder, no index, or no user message.
 	if !m.semanticEnabled() || state.ActiveIndex == nil || state.ArchiveIndex == nil || userMessage == "" {
@@ -283,7 +294,7 @@ func (m *Manager) compilePromptMeasured(sessionID, taskID, userMessage, systemPr
 	bd := &domain.CompileLatencyBreakdown{}
 
 	activeNodes := state.Tree.GetActiveNodes()
-	comp := compiler.NewCompilerWithCounter(m.compilerBudget, m.tokenCounter)
+	comp := m.newCompiler()
 
 	if !m.semanticEnabled() || state.ActiveIndex == nil || state.ArchiveIndex == nil || userMessage == "" {
 		tAsm := time.Now()

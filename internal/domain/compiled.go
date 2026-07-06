@@ -31,6 +31,8 @@ type CompiledPrompt struct {
 	OriginalTokenCount  int       `json:"original_token_count"`
 	CompiledTokenCount  int       `json:"compiled_token_count"`
 	CreatedAt           time.Time `json:"created_at"`
+	// CacheStableRender is true when nodes were rendered in stable turn order.
+	CacheStableRender bool `json:"cache_stable_render,omitempty"`
 	// LatencyBreakdown is non-nil only when ACGC_LATENCY_BREAKDOWN is enabled on the server.
 	LatencyBreakdown *CompileLatencyBreakdown `json:"latency_breakdown,omitempty"`
 }
