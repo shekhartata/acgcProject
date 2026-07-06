@@ -53,7 +53,6 @@ A Go sidecar runtime that sits between an AI agent and its LLM, intercepting eve
   - [Quality evaluation (LLM harness)](#quality-evaluation-llm-harness)
   - [External benchmark evaluation](#external-benchmark-evaluation)
 - [Project Structure](#project-structure)
-- [Current Status vs Roadmap](#current-status-vs-roadmap)
 
 ---
 
@@ -923,45 +922,3 @@ acgcProject/
 ├── .env.example           # Environment variable template
 └── go.mod
 ```
-
----
-
-## Current Status vs Roadmap
-
-### Shipped (MVP)
-
-| Component | Status | Details |
-|---|---|---|
-| gRPC interface | Done | 5 RPCs, language-agnostic, proto definitions |
-| Go SDK | Done | `pkg/acgc` with `ContextRuntime` |
-| State tree | Done | In-memory, typed nodes, Facts/Decisions, optional embeddings |
-| Heuristic + semantic scorer | Done | Eight signals plus **0.20× cosine similarity** when semantic mode is on; heuristic-only stays sub-millisecond for ~100 nodes (embedding HTTP calls add their own latency) |
-| Dual HNSW (active + archive) | Done | Per-session graphs, GC reconciliation, Mongo rehydration |
-| Facts pipeline | Done | `internal/facts` extraction, GC deferral, compressor + compiler hooks |
-| Garbage collector | Done | Mark-sweep-compact + **soft headroom** + **max active nodes** + hybrid factual protection |
-| Simple compressor | Done | String-based branch compression (no LLM needed) |
-| LLM compressor | Done | OpenAI-compatible summaries + **`ENTITIES:`** → verbatim facts |
-| Prompt compiler | Done | Budgeted Markdown sections + **dual user messages** (`FinalPrompt` + current turn) |
-| Prompt prefix cache (stable render) | Done | Opt-in `ACGC_CACHE_STABLE_RENDER`; `cached_prompt_tokens` on `RunResponse.stats` |
-| MongoDB persistence | Done | 6 collections; node embeddings + archived embedding queries |
-| Concurrency model | Done | Per-session goroutines, channels, RWMutex |
-| Context rehydration | Done | Pull raw events from archive for compressed branches |
-| Interactive test client | Done | REPL with real LLM integration |
-| Stress test suite | Done | Token savings, coherency, concurrency (race-free) |
-| Quality evaluation (`eval/`) | Done | Pluggable strategies (naive / sliding_window / acgc) with probe + judge scoring; semantic path optional |
-| LLM compatibility | Done | GPT-5 / o3 reasoning model support (dynamic parameter handling) |
-
-### Planned (Post-MVP)
-
-| Feature | Priority | Description |
-|---|---|---|
-| **Shared vector tier (Redis / external ANN)** | High | Ship path already uses **in-process dual HNSW + Mongo embeddings**. Moving the graph to **Redis (RediSearch / Redis Stack)** or another shared ANN tier would accelerate cold/warm multi-instance deployments, reduce per-process memory for very large sessions, and centralize vector updates—**not** a prerequisite for semantic retrieval, which works today on a single node. |
-| **Redis Streams for event processing** | Medium | Replace per-session goroutines with Redis Streams for distributed event processing. Enables horizontal scaling — multiple ACGC instances can process events for different sessions. Also provides durable event queues (current channels lose events on crash). |
-| **Policy engine** | Medium | Configurable GC policies per session/task. Aggressive (minimize tokens, accept lower coherency), conservative (preserve more context, higher token cost), balanced (current default). Policy hot-swapping during a session. |
-| **Semantic deduplication** | Medium | Use embeddings to detect near-duplicate nodes (e.g., user asks the same question rephrased). Currently only detects exact title matches. |
-| **Streaming support** | Medium | gRPC server-streaming for `Run` — stream LLM tokens back as they arrive instead of waiting for the full response. |
-| **Multi-agent context sharing** | Low | Allow multiple agents to share a context tree (e.g., a coding agent and a review agent working on the same task). Requires conflict resolution for concurrent tree modifications. |
-| **Admin dashboard** | Low | Web UI for inspecting state trees, viewing GC history, monitoring token savings across sessions, and manually triggering operations. |
-| **Observability** | Low | Prometheus metrics endpoint, OpenTelemetry tracing for the full request lifecycle, structured JSON logging with correlation IDs. |
-| **Context importance hints** | Low | Allow the agent to annotate events with importance hints ("this decision is critical", "this is temporary debug output") that the scorer uses as additional signals. |
-| **Tiered storage** | Low | Hot tier (in-memory) → Warm tier (Redis/SSD) → Cold tier (MongoDB/S3). Currently only hot + cold. The warm tier would hold recently-archived nodes for faster rehydration. |
