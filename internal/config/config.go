@@ -61,6 +61,9 @@ type Config struct {
 
 	// When true, RunResponse may include CompilePrompt + LLM latency breakdown fields.
 	LatencyBreakdown bool
+
+	// When true, selected nodes are rendered in stable turn order for provider prefix caching.
+	CacheStableRender bool
 }
 
 func Load() *Config {
@@ -116,6 +119,8 @@ func Load() *Config {
 		EmbedDim:    envOrDefaultInt("ACGC_EMBED_DIM", 1536),
 
 		LatencyBreakdown: envOrDefaultBool("ACGC_LATENCY_BREAKDOWN", false),
+
+		CacheStableRender: envOrDefaultBool("ACGC_CACHE_STABLE_RENDER", false),
 	}
 }
 

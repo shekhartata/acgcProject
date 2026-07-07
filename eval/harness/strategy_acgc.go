@@ -43,6 +43,9 @@ func (s *acgcStrategy) BuildPrompt(in StrategyInput) (StrategyOutput, error) {
 		sc.SetSemanticWeight(s.cfg.SemanticWeight)
 	}
 	comp := compiler.NewCompilerWithCounter(in.TokenBudget, s.counter)
+	if s.cfg.CacheStableRender {
+		comp.WithCacheStableRender(true)
+	}
 	collector := gc.NewGarbageCollector(gc.Policy{
 		MaxPromptTokens:       in.TokenBudget,
 		MaxTreeDepth:          s.cfg.MaxTreeDepth,

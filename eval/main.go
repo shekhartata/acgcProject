@@ -73,6 +73,7 @@ func main() {
 
 	acgcCfg := harness.DefaultACGCConfig()
 	acgcCfg.TokenBudget = *tokenBudget
+	acgcCfg.CacheStableRender = cfg.CacheStableRender
 
 	// Optionally enable the HNSW semantic layer in the ACGC pipeline.
 	// Defaults to ACGC_LLM_API_KEY for the embedder when no dedicated key.

@@ -133,7 +133,8 @@ func main() {
 			M:        cfg.HNSWM,
 			EFSearch: cfg.HNSWEFSearch,
 		},
-		LatencyBreakdown: cfg.LatencyBreakdown,
+		LatencyBreakdown:  cfg.LatencyBreakdown,
+		CacheStableRender: cfg.CacheStableRender,
 	})
 
 	// Default LLM client (the "master" LLM — used when request doesn't specify its own)

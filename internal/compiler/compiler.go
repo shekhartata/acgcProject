@@ -12,8 +12,16 @@ import (
 )
 
 type Compiler struct {
-	tokenBudget  int
-	tokenCounter tokenizer.TokenCounter
+	tokenBudget       int
+	tokenCounter      tokenizer.TokenCounter
+	cacheStableRender bool
+}
+
+// WithCacheStableRender enables deterministic chronological render order after
+// budget selection. Score/semantic sort still controls inclusion.
+func (c *Compiler) WithCacheStableRender(enabled bool) *Compiler {
+	c.cacheStableRender = enabled
+	return c
 }
 
 // NewCompiler builds a compiler with the given token budget. It uses the
@@ -110,6 +118,7 @@ func (c *Compiler) compile(
 		CurrentUserMessage: userMessage,
 		SystemPrompt:       systemPrompt,
 		CreatedAt:          time.Now(),
+		CacheStableRender:  c.cacheStableRender,
 	}
 
 	originalTokens := c.count(systemPrompt) + c.count(userMessage)
@@ -189,26 +198,30 @@ func (c *Compiler) compile(
 
 		selected, excluded, used := c.selectWithinBudget(bucket, remaining)
 		if len(selected) > 0 {
-			text := formatSection(bucketLabels[i], selected)
+			render := selected
+			if c.cacheStableRender {
+				render = StabilizeRenderOrder(selected)
+			}
+			text := formatSection(bucketLabels[i], render)
 			sections = append(sections, text)
 			tokensUsed += used
 			remaining -= used
 
 			switch bucketLabels[i] {
 			case "Key Decisions":
-				for _, s := range selected {
+				for _, s := range render {
 					cp.RelevantDecisions = append(cp.RelevantDecisions, s.Summary)
 				}
 			case "Tool Outputs":
-				for _, s := range selected {
+				for _, s := range render {
 					cp.RelevantToolOutputs = append(cp.RelevantToolOutputs, s.Summary)
 				}
 			case "Prior Context":
-				for _, s := range selected {
+				for _, s := range render {
 					cp.CompressedContext = append(cp.CompressedContext, s.Summary)
 				}
 			case "Open Issues":
-				for _, s := range selected {
+				for _, s := range render {
 					cp.OpenIssues = append(cp.OpenIssues, s.Summary)
 				}
 			}

@@ -440,6 +440,8 @@ type PromptStats struct {
 	ActiveNodes        int32                  `protobuf:"varint,7,opt,name=active_nodes,json=activeNodes,proto3" json:"active_nodes,omitempty"`
 	CompressedNodes    int32                  `protobuf:"varint,8,opt,name=compressed_nodes,json=compressedNodes,proto3" json:"compressed_nodes,omitempty"`
 	ArchivedNodes      int32                  `protobuf:"varint,9,opt,name=archived_nodes,json=archivedNodes,proto3" json:"archived_nodes,omitempty"`
+	// Provider-reported prefix cache hits (OpenAI: prompt_tokens_details.cached_tokens). 0 when not reported.
+	CachedPromptTokens int32 `protobuf:"varint,10,opt,name=cached_prompt_tokens,json=cachedPromptTokens,proto3" json:"cached_prompt_tokens,omitempty"`
 	unknownFields      protoimpl.UnknownFields
 	sizeCache          protoimpl.SizeCache
 }
@@ -533,6 +535,13 @@ func (x *PromptStats) GetCompressedNodes() int32 {
 func (x *PromptStats) GetArchivedNodes() int32 {
 	if x != nil {
 		return x.ArchivedNodes
+	}
+	return 0
+}
+
+func (x *PromptStats) GetCachedPromptTokens() int32 {
+	if x != nil {
+		return x.CachedPromptTokens
 	}
 	return 0
 }
@@ -1433,7 +1442,7 @@ const file_acgc_proto_rawDesc = "" +
 	"\x13compile_assembly_ms\x18\x04 \x01(\x05R\x11compileAssemblyMs\x12.\n" +
 	"\x13compose_overhead_ms\x18\x05 \x01(\x05R\x11composeOverheadMs\x12\x15\n" +
 	"\x06llm_ms\x18\x06 \x01(\x05R\x05llmMs\x12+\n" +
-	"\x11semantic_fallback\x18\a \x01(\bR\x10semanticFallback\"\xf6\x02\n" +
+	"\x11semantic_fallback\x18\a \x01(\bR\x10semanticFallback\"\xa8\x03\n" +
 	"\vPromptStats\x120\n" +
 	"\x14original_token_count\x18\x01 \x01(\x05R\x12originalTokenCount\x120\n" +
 	"\x14compiled_token_count\x18\x02 \x01(\x05R\x12compiledTokenCount\x12!\n" +
@@ -1443,7 +1452,9 @@ const file_acgc_proto_rawDesc = "" +
 	"\tgc_reason\x18\x06 \x01(\tR\bgcReason\x12!\n" +
 	"\factive_nodes\x18\a \x01(\x05R\vactiveNodes\x12)\n" +
 	"\x10compressed_nodes\x18\b \x01(\x05R\x0fcompressedNodes\x12%\n" +
-	"\x0earchived_nodes\x18\t \x01(\x05R\rarchivedNodes\"\x8b\x02\n" +
+	"\x0earchived_nodes\x18\t \x01(\x05R\rarchivedNodes\x120\n" +
+	"\x14cached_prompt_tokens\x18\n" +
+	" \x01(\x05R\x12cachedPromptTokens\"\x8b\x02\n" +
 	"\x13CaptureEventRequest\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x17\n" +

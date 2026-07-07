@@ -49,10 +49,10 @@ A Go sidecar runtime that sits between an AI agent and its LLM, intercepting eve
 - [Benchmarks and Evaluation](#benchmarks-and-evaluation)
   - [Stress test suite (no API key)](#stress-test-suite-no-api-key)
   - [Latency benchmarking (`acgc-latencybench`)](#latency-benchmarking-acgc-latencybench)
+  - [Prompt prefix cache evaluation (`acgc-cachebench`)](#prompt-prefix-cache-evaluation-acgc-cachebench)
   - [Quality evaluation (LLM harness)](#quality-evaluation-llm-harness)
   - [External benchmark evaluation](#external-benchmark-evaluation)
 - [Project Structure](#project-structure)
-- [Current Status vs Roadmap](#current-status-vs-roadmap)
 
 ---
 
@@ -138,7 +138,7 @@ Full guide: [Integrating ACGC into your application](#integrating-acgc-into-your
 
 ### Path 4 — Benchmark it
 
-Four harnesses answer four different questions — see [Benchmarks and Evaluation](#benchmarks-and-evaluation) for the orientation table, commands, and recorded numbers. You do **not** need to run any of them to use ACGC; they exist to justify it.
+Five harnesses answer five different questions — see [Benchmarks and Evaluation](#benchmarks-and-evaluation) for the orientation table, commands, and recorded numbers. You do **not** need to run any of them to use ACGC; they exist to justify it.
 
 ---
 
@@ -456,6 +456,8 @@ The compiler (`internal/compiler`) builds **`FinalPrompt`**: Markdown sections (
 
 **Token counting:** a real, model-aware BPE tokenizer (`internal/tokenizer`, backed by `tiktoken-go`) is used for budgeting and stats. The encoding is resolved from the configured model (e.g. `o200k_base` for GPT-4o/GPT-5, `cl100k_base` for GPT-4). If the encoding can't be loaded it falls back to the historical `len(string) / 4` (~4 chars per token) approximation. `NewCompiler(budget)` remains supported (it uses the process-wide default counter); `NewCompilerWithCounter(budget, counter)` injects an explicit one.
 
+**Provider prefix caching (opt-in):** when `ACGC_CACHE_STABLE_RENDER=true`, selected nodes are rendered in stable `(TurnNumber, NodeID)` order **after** budget selection — score/semantic sort still controls *which* nodes fit, only bullet order changes. That keeps compiled token counts flat while making repeated prompts byte-identical so OpenAI-style automatic prefix caching can hit across turns. Live servers expose hits on `RunResponse.stats.cached_prompt_tokens` (parsed from `usage.prompt_tokens_details.cached_tokens`; other providers leave it at `0`). See [Prompt prefix cache evaluation](#prompt-prefix-cache-evaluation-acgc-cachebench) for measured OFF vs ON numbers.
+
 ---
 
 ### Context Rehydration
@@ -549,17 +551,19 @@ Copy `.env.example` to `.env` and set what your path needs. **Minimum for a live
 | `ACGC_EMBED_MODEL` | `text-embedding-3-small` | Embedding model name |
 | `ACGC_EMBED_DIM` | `1536` | Vector dimension (must match model) |
 | `ACGC_LATENCY_BREAKDOWN` | `false` | When `true`, `RunResponse` may include `latency_breakdown` (compile phases + `llm_ms`; minimal overhead when off) |
+| `ACGC_CACHE_STABLE_RENDER` | `false` | When `true`, render selected context nodes in stable turn order so provider prefix caching can hit across turns (score/semantic sort still controls inclusion) |
 
 ---
 
 ## Benchmarks and Evaluation
 
-Four harnesses answer four different questions. None are required to *use* ACGC — they justify it:
+Five harnesses answer five different questions. None are required to *use* ACGC — they justify it:
 
 | Question | Harness | Needs MongoDB | Needs API key | Cost |
 |---|---|---|---|---|
 | Does the pipeline work and save tokens? | [Stress test suite](#stress-test-suite-no-api-key) | No | No | Free |
 | How much wall-clock does ACGC add per call? | [Latency bench](#latency-benchmarking-acgc-latencybench) | Yes (live server) | Yes | LLM calls |
+| Does **provider prefix caching** improve with stable render? | [Cache bench](#prompt-prefix-cache-evaluation-acgc-cachebench) | No (in-process) | Yes | LLM calls (small) |
 | Does answer **quality** hold up on hand-written scenarios? | [Quality evaluation](#quality-evaluation-llm-harness) | No (in-process) | Yes (+ embeddings with `-semantic`) | LLM + judge calls |
 | Does ACGC hold up on **published long-memory benchmarks**? | [External benchmark evaluation](#external-benchmark-evaluation) | No (in-process) | Yes (+ embeddings with `-semantic`) | LLM + judge calls (larger) |
 
@@ -691,6 +695,56 @@ Below is one **representative** bench captured **2026-05-14**: **`localhost:5005
 | **`compile_total_ms`** | 0.65 s | 1.05 s | 2.39 s |
 
 **Takeaway:** On this fixture, **`Run`** was **~2–4 s slower at median/tail** than sending the naive transcript once; **most of wall clock inside `Run` is still `llm_ms`**. Your numbers will vary with **model**, **network**, **`warm-settle-delay`**, and **`discard_n`**.
+
+### Prompt prefix cache evaluation (`acgc-cachebench`)
+
+The **`acgc-cachebench`** binary (`cmd/acgc-cachebench/`) measures **provider automatic prefix cache hits** when the same session sends repeated LLM calls. It runs the full ACGC stack in-process (tree → scorer → GC → compiler → LLM) — no MongoDB or gRPC — and reads **`cached_prompt_tokens`** from the OpenAI-compatible usage block.
+
+**What it tests:** with `ACGC_CACHE_STABLE_RENDER=false` (default), score-sorted render order can shuffle between turns even when the same nodes are selected, breaking byte-identical prefixes. With the flag **on**, render order is stabilized so turns 2+ can reuse the provider cache. Budget selection and compiled token counts stay the same; only prompt byte order changes.
+
+#### How to reproduce
+
+Requires **`ACGC_LLM_API_KEY`** (and **`ACGC_EMBED_API_KEY`** or fallback to the LLM key — the bench always runs semantic compile). OpenAI-style providers need **~1024+ prompt tokens** before automatic prefix caching kicks in.
+
+```bash
+go run ./cmd/acgc-cachebench -h
+
+# Side-by-side OFF vs ON — freeze mode (valid cache test: full history, identical probe × N)
+go run ./cmd/acgc-cachebench -compare -freeze -turns 5
+
+# Growing history each turn (shows when prefix cache cannot hit yet)
+go run ./cmd/acgc-cachebench -compare -turns 5
+```
+
+Use **`-stable-render`** for a single run, **`-compare`** for OFF then ON tables, **`-freeze`** to ingest history once then repeat the same question (recommended for cache measurement). Default scenario: `deep_history_recall_1` from the eval fixtures.
+
+On a live server, enable **`ACGC_CACHE_STABLE_RENDER=true`** and compare **`RunResponse.stats.cached_prompt_tokens`** across turns in the same **`session_id`** instead.
+
+#### Recorded run (**2026-07-06**)
+
+Configuration: **`gpt-5`** via OpenAI-compatible API, semantic on, **`deep_history_recall_1`**, **8000-token** budget, **5** sequential calls, probe repeated each turn.
+
+**Freeze mode** (~6045 compiled tokens per call — above the provider cache floor):
+
+| Turn | Compiled tokens | Cached (OFF) | Cached (ON) |
+|---:|---:|---:|---:|
+| 1 | ~6045 | 0 | 0 |
+| 2 | ~6045 | **6016** (~99.5%) | **6016** (~99.8%) |
+| 3 | ~6045 | 0 | **6016** (~99.8%) |
+| 4 | ~6045 | **6016** (~99.5%) | **6016** (~99.8%) |
+| 5 | ~6045 | **6016** (~99.5%) | **6016** (~99.8%) |
+
+| Metric | stable_render **OFF** | stable_render **ON** | Δ (ON − OFF) |
+|---|---:|---:|---:|
+| **Total cached (turns 2–5)** | **18,048** | **24,064** | **+6,016** |
+
+Turn 1 is always cold. **OFF** still hits cache on most repeats, but turn 3 misses when render order shifts; **ON** hits on every repeat turn — **+6,016 cached tokens** on this fixture (~one full prompt worth of extra reuse).
+
+**Grow mode** (history expands each turn, ~23.5k compiled tokens by turn 5): **0 cached tokens** with both OFF and ON. The compiled prefix changes every turn when new nodes enter the budget set; stable render alone does not preserve a growing prefix (committed-prefix snapshots would be a follow-up).
+
+#### Takeaway
+
+Enable **`ACGC_CACHE_STABLE_RENDER=true`** when sessions send **similar compiled prompts** across turns (same session, stable context set). Expect **no change** to ACGC token reduction or inclusion logic — only more consistent provider cache hits. For **monotonically growing** histories, prefix caching still requires a stable compiled prefix (not yet built in v1).
 
 ### Quality evaluation (LLM harness)
 
@@ -831,6 +885,8 @@ Artifacts: **`eval/results/external_longmemeval_semantic_report.md`**, **`eval/r
 acgcProject/
 ├── cmd/
 │   ├── acgc/              # Server entry point
+│   ├── acgc-cachebench/   # Provider prefix cache OFF vs ON bench (in-process)
+│   ├── acgc-latencybench/ # Wall-clock naive vs gRPC Run comparison
 │   └── testcli/           # Interactive REPL test client
 ├── api/proto/             # Generated gRPC Go code
 ├── proto/                 # Protobuf service definitions
@@ -866,44 +922,3 @@ acgcProject/
 ├── .env.example           # Environment variable template
 └── go.mod
 ```
-
----
-
-## Current Status vs Roadmap
-
-### Shipped (MVP)
-
-| Component | Status | Details |
-|---|---|---|
-| gRPC interface | Done | 5 RPCs, language-agnostic, proto definitions |
-| Go SDK | Done | `pkg/acgc` with `ContextRuntime` |
-| State tree | Done | In-memory, typed nodes, Facts/Decisions, optional embeddings |
-| Heuristic + semantic scorer | Done | Eight signals plus **0.20× cosine similarity** when semantic mode is on; heuristic-only stays sub-millisecond for ~100 nodes (embedding HTTP calls add their own latency) |
-| Dual HNSW (active + archive) | Done | Per-session graphs, GC reconciliation, Mongo rehydration |
-| Facts pipeline | Done | `internal/facts` extraction, GC deferral, compressor + compiler hooks |
-| Garbage collector | Done | Mark-sweep-compact + **soft headroom** + **max active nodes** + hybrid factual protection |
-| Simple compressor | Done | String-based branch compression (no LLM needed) |
-| LLM compressor | Done | OpenAI-compatible summaries + **`ENTITIES:`** → verbatim facts |
-| Prompt compiler | Done | Budgeted Markdown sections + **dual user messages** (`FinalPrompt` + current turn) |
-| MongoDB persistence | Done | 6 collections; node embeddings + archived embedding queries |
-| Concurrency model | Done | Per-session goroutines, channels, RWMutex |
-| Context rehydration | Done | Pull raw events from archive for compressed branches |
-| Interactive test client | Done | REPL with real LLM integration |
-| Stress test suite | Done | Token savings, coherency, concurrency (race-free) |
-| Quality evaluation (`eval/`) | Done | Pluggable strategies (naive / sliding_window / acgc) with probe + judge scoring; semantic path optional |
-| LLM compatibility | Done | GPT-5 / o3 reasoning model support (dynamic parameter handling) |
-
-### Planned (Post-MVP)
-
-| Feature | Priority | Description |
-|---|---|---|
-| **Shared vector tier (Redis / external ANN)** | High | Ship path already uses **in-process dual HNSW + Mongo embeddings**. Moving the graph to **Redis (RediSearch / Redis Stack)** or another shared ANN tier would accelerate cold/warm multi-instance deployments, reduce per-process memory for very large sessions, and centralize vector updates—**not** a prerequisite for semantic retrieval, which works today on a single node. |
-| **Redis Streams for event processing** | Medium | Replace per-session goroutines with Redis Streams for distributed event processing. Enables horizontal scaling — multiple ACGC instances can process events for different sessions. Also provides durable event queues (current channels lose events on crash). |
-| **Policy engine** | Medium | Configurable GC policies per session/task. Aggressive (minimize tokens, accept lower coherency), conservative (preserve more context, higher token cost), balanced (current default). Policy hot-swapping during a session. |
-| **Semantic deduplication** | Medium | Use embeddings to detect near-duplicate nodes (e.g., user asks the same question rephrased). Currently only detects exact title matches. |
-| **Streaming support** | Medium | gRPC server-streaming for `Run` — stream LLM tokens back as they arrive instead of waiting for the full response. |
-| **Multi-agent context sharing** | Low | Allow multiple agents to share a context tree (e.g., a coding agent and a review agent working on the same task). Requires conflict resolution for concurrent tree modifications. |
-| **Admin dashboard** | Low | Web UI for inspecting state trees, viewing GC history, monitoring token savings across sessions, and manually triggering operations. |
-| **Observability** | Low | Prometheus metrics endpoint, OpenTelemetry tracing for the full request lifecycle, structured JSON logging with correlation IDs. |
-| **Context importance hints** | Low | Allow the agent to annotate events with importance hints ("this decision is critical", "this is temporary debug output") that the scorer uses as additional signals. |
-| **Tiered storage** | Low | Hot tier (in-memory) → Warm tier (Redis/SSD) → Cold tier (MongoDB/S3). Currently only hot + cold. The warm tier would hold recently-archived nodes for faster rehydration. |
