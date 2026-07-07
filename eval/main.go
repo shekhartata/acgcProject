@@ -10,15 +10,15 @@ import (
 	"strings"
 	"time"
 
-	"github.com/chandrashekhartata/acgc/eval/datasets"
-	"github.com/chandrashekhartata/acgc/eval/datasets/external"
-	"github.com/chandrashekhartata/acgc/eval/harness"
-	"github.com/chandrashekhartata/acgc/eval/report"
-	"github.com/chandrashekhartata/acgc/eval/scoring"
-	"github.com/chandrashekhartata/acgc/internal/config"
-	"github.com/chandrashekhartata/acgc/internal/embedding"
-	"github.com/chandrashekhartata/acgc/internal/tokenizer"
-	"github.com/chandrashekhartata/acgc/internal/vectorindex"
+	"github.com/shekhartata/acgcProject/eval/datasets"
+	"github.com/shekhartata/acgcProject/eval/datasets/external"
+	"github.com/shekhartata/acgcProject/eval/harness"
+	"github.com/shekhartata/acgcProject/eval/report"
+	"github.com/shekhartata/acgcProject/eval/scoring"
+	"github.com/shekhartata/acgcProject/internal/config"
+	"github.com/shekhartata/acgcProject/internal/embedding"
+	"github.com/shekhartata/acgcProject/internal/tokenizer"
+	"github.com/shekhartata/acgcProject/internal/vectorindex"
 )
 
 func main() {

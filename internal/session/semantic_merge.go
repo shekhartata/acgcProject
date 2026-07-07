@@ -3,9 +3,9 @@ package session
 import (
 	"sort"
 
-	"github.com/chandrashekhartata/acgc/internal/domain"
-	"github.com/chandrashekhartata/acgc/internal/statetree"
-	"github.com/chandrashekhartata/acgc/internal/vectorindex"
+	"github.com/shekhartata/acgcProject/internal/domain"
+	"github.com/shekhartata/acgcProject/internal/statetree"
+	"github.com/shekhartata/acgcProject/internal/vectorindex"
 )
 
 // MergeSemanticHits merges two hit lists, keeping the best cosine score per NodeID.

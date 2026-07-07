@@ -3,8 +3,8 @@ package harness
 import (
 	"context"
 
-	"github.com/chandrashekhartata/acgc/eval/datasets"
-	"github.com/chandrashekhartata/acgc/internal/llm"
+	"github.com/shekhartata/acgcProject/eval/datasets"
+	"github.com/shekhartata/acgcProject/internal/llm"
 )
 
 // PipelineKind identifies which context-management strategy produced a result.

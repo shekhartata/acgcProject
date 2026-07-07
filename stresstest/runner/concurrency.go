@@ -7,12 +7,12 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/chandrashekhartata/acgc/internal/compiler"
-	"github.com/chandrashekhartata/acgc/internal/domain"
-	"github.com/chandrashekhartata/acgc/internal/gc"
-	"github.com/chandrashekhartata/acgc/internal/scorer"
-	"github.com/chandrashekhartata/acgc/internal/statetree"
-	"github.com/chandrashekhartata/acgc/stresstest/fixtures"
+	"github.com/shekhartata/acgcProject/internal/compiler"
+	"github.com/shekhartata/acgcProject/internal/domain"
+	"github.com/shekhartata/acgcProject/internal/gc"
+	"github.com/shekhartata/acgcProject/internal/scorer"
+	"github.com/shekhartata/acgcProject/internal/statetree"
+	"github.com/shekhartata/acgcProject/stresstest/fixtures"
 )
 
 type ConcurrencyResult struct {

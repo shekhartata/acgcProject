@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/chandrashekhartata/acgc/internal/llm"
+	"github.com/shekhartata/acgcProject/internal/llm"
 )
 
 // NaiveLLMLatency runs the full naive transcript (mirrors eval/harness baseline):

@@ -1,6 +1,6 @@
 package scoring
 
-import "github.com/chandrashekhartata/acgc/eval/harness"
+import "github.com/shekhartata/acgcProject/eval/harness"
 
 // Verdict classifies a probe pair after scoring.
 type Verdict string

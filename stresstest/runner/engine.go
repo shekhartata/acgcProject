@@ -6,16 +6,16 @@ import (
 	"log"
 	"time"
 
-	"github.com/chandrashekhartata/acgc/internal/compiler"
-	"github.com/chandrashekhartata/acgc/internal/domain"
-	"github.com/chandrashekhartata/acgc/internal/embedding"
-	"github.com/chandrashekhartata/acgc/internal/gc"
-	"github.com/chandrashekhartata/acgc/internal/scorer"
-	"github.com/chandrashekhartata/acgc/internal/session"
-	"github.com/chandrashekhartata/acgc/internal/statetree"
-	"github.com/chandrashekhartata/acgc/internal/tokenizer"
-	"github.com/chandrashekhartata/acgc/internal/vectorindex"
-	"github.com/chandrashekhartata/acgc/stresstest/fixtures"
+	"github.com/shekhartata/acgcProject/internal/compiler"
+	"github.com/shekhartata/acgcProject/internal/domain"
+	"github.com/shekhartata/acgcProject/internal/embedding"
+	"github.com/shekhartata/acgcProject/internal/gc"
+	"github.com/shekhartata/acgcProject/internal/scorer"
+	"github.com/shekhartata/acgcProject/internal/session"
+	"github.com/shekhartata/acgcProject/internal/statetree"
+	"github.com/shekhartata/acgcProject/internal/tokenizer"
+	"github.com/shekhartata/acgcProject/internal/vectorindex"
+	"github.com/shekhartata/acgcProject/stresstest/fixtures"
 )
 
 type EngineConfig struct {

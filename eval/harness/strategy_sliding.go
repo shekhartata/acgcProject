@@ -1,6 +1,6 @@
 package harness
 
-import "github.com/chandrashekhartata/acgc/internal/domain"
+import "github.com/shekhartata/acgcProject/internal/domain"
 
 // slidingStrategy keeps only the most recent context, filling the token budget
 // newest-first. It models the common "last N turns" context window baseline.

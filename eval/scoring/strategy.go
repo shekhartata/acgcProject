@@ -1,6 +1,6 @@
 package scoring
 
-import "github.com/chandrashekhartata/acgc/eval/harness"
+import "github.com/shekhartata/acgcProject/eval/harness"
 
 // StrategyMetric is a single probe's scored outcome for one strategy. This is
 // the raw material for the side-by-side per-strategy comparison table.

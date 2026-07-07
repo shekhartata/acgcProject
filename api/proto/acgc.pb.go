@@ -1551,7 +1551,7 @@ const file_acgc_proto_rawDesc = "" +
 	"\bGetState\x12\x18.acgc.v1.GetStateRequest\x1a\x19.acgc.v1.GetStateResponse\x12B\n" +
 	"\tTriggerGC\x12\x19.acgc.v1.TriggerGCRequest\x1a\x1a.acgc.v1.TriggerGCResponse\x12E\n" +
 	"\n" +
-	"GetMetrics\x12\x1a.acgc.v1.GetMetricsRequest\x1a\x1b.acgc.v1.GetMetricsResponseB.Z,github.com/chandrashekhartata/acgc/api/protob\x06proto3"
+	"GetMetrics\x12\x1a.acgc.v1.GetMetricsRequest\x1a\x1b.acgc.v1.GetMetricsResponseB.Z,github.com/shekhartata/acgcProject/api/protob\x06proto3"
 
 var (
 	file_acgc_proto_rawDescOnce sync.Once

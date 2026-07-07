@@ -1,6 +1,6 @@
 package scoring
 
-import "github.com/chandrashekhartata/acgc/eval/harness"
+import "github.com/shekhartata/acgcProject/eval/harness"
 
 // Score is a normalized 0.0 - 5.0 quality score for a single probe response.
 // 5.0 = perfect, 0.0 = wrong.

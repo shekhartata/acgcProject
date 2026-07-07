@@ -11,10 +11,10 @@ import (
 	"sync"
 	"time"
 
-	pb "github.com/chandrashekhartata/acgc/api/proto"
-	"github.com/chandrashekhartata/acgc/internal/config"
-	"github.com/chandrashekhartata/acgc/internal/latencybench"
-	"github.com/chandrashekhartata/acgc/internal/llm"
+	pb "github.com/shekhartata/acgcProject/api/proto"
+	"github.com/shekhartata/acgcProject/internal/config"
+	"github.com/shekhartata/acgcProject/internal/latencybench"
+	"github.com/shekhartata/acgcProject/internal/llm"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 )

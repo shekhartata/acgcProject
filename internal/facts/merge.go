@@ -3,7 +3,7 @@ package facts
 import (
 	"strings"
 
-	"github.com/chandrashekhartata/acgc/internal/domain"
+	"github.com/shekhartata/acgcProject/internal/domain"
 )
 
 // MergeFromNodes merges all unique Facts then all unique Decisions from children (dedupe, cap).

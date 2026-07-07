@@ -14,7 +14,7 @@ import (
 	"fmt"
 	"math/rand"
 
-	"github.com/chandrashekhartata/acgc/eval/datasets"
+	"github.com/shekhartata/acgcProject/eval/datasets"
 )
 
 // Options controls how much of a benchmark file is loaded.

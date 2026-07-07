@@ -6,8 +6,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/chandrashekhartata/acgc/internal/domain"
-	"github.com/chandrashekhartata/acgc/internal/facts"
+	"github.com/shekhartata/acgcProject/internal/domain"
+	"github.com/shekhartata/acgcProject/internal/facts"
 )
 
 // LLMCompressor uses a cheap LLM to compress branches into concise summaries.

@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/chandrashekhartata/acgc/internal/config"
-	"github.com/chandrashekhartata/acgc/internal/llm"
+	"github.com/shekhartata/acgcProject/internal/config"
+	"github.com/shekhartata/acgcProject/internal/llm"
 )
 
 func main() {

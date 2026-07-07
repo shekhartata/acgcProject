@@ -6,9 +6,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/chandrashekhartata/acgc/internal/domain"
-	"github.com/chandrashekhartata/acgc/internal/tokenizer"
-	"github.com/chandrashekhartata/acgc/internal/vectorindex"
+	"github.com/shekhartata/acgcProject/internal/domain"
+	"github.com/shekhartata/acgcProject/internal/tokenizer"
+	"github.com/shekhartata/acgcProject/internal/vectorindex"
 )
 
 type Compiler struct {

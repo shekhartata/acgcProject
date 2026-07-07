@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	pb "github.com/chandrashekhartata/acgc/api/proto"
+	pb "github.com/shekhartata/acgcProject/api/proto"
 )
 
 // WarmSessionGRPC replays scripted warm_pairs via CaptureEvent so the server's

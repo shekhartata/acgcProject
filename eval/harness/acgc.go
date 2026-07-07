@@ -1,9 +1,9 @@
 package harness
 
 import (
-	"github.com/chandrashekhartata/acgc/internal/domain"
-	"github.com/chandrashekhartata/acgc/internal/embedding"
-	"github.com/chandrashekhartata/acgc/internal/vectorindex"
+	"github.com/shekhartata/acgcProject/internal/domain"
+	"github.com/shekhartata/acgcProject/internal/embedding"
+	"github.com/shekhartata/acgcProject/internal/vectorindex"
 )
 
 // ACGCConfig mirrors the runtime ACGC policy knobs. Defaults match the

@@ -3,10 +3,10 @@ package runner
 import (
 	"strings"
 
-	"github.com/chandrashekhartata/acgc/internal/compiler"
-	"github.com/chandrashekhartata/acgc/internal/domain"
-	"github.com/chandrashekhartata/acgc/internal/statetree"
-	"github.com/chandrashekhartata/acgc/stresstest/fixtures"
+	"github.com/shekhartata/acgcProject/internal/compiler"
+	"github.com/shekhartata/acgcProject/internal/domain"
+	"github.com/shekhartata/acgcProject/internal/statetree"
+	"github.com/shekhartata/acgcProject/stresstest/fixtures"
 )
 
 // CheckCoherency evaluates how well ACGC preserves important context after GC.
