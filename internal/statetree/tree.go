@@ -6,8 +6,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/chandrashekhartata/acgc/internal/domain"
-	"github.com/chandrashekhartata/acgc/internal/facts"
+	"github.com/shekhartata/acgcProject/internal/domain"
+	"github.com/shekhartata/acgcProject/internal/facts"
 )
 
 // Tree is the in-memory active state tree for a single session.

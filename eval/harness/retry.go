@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/chandrashekhartata/acgc/internal/llm"
+	"github.com/shekhartata/acgcProject/internal/llm"
 )
 
 // GenerateWithRetry wraps client.Generate with retries for transient provider

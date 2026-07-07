@@ -6,7 +6,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/chandrashekhartata/acgc/eval/datasets"
+	"github.com/shekhartata/acgcProject/eval/datasets"
 )
 
 func init() { register(longMemEval{}) }

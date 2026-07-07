@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package acgc.v1;
 
-option go_package = "github.com/chandrashekhartata/acgc/api/proto";
+option go_package = "github.com/shekhartata/acgcProject/api/proto";
 
 import "google/protobuf/timestamp.proto";
 

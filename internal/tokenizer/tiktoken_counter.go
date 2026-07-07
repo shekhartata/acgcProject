@@ -8,7 +8,7 @@ import (
 	tiktoken "github.com/pkoukk/tiktoken-go"
 	tiktokenloader "github.com/pkoukk/tiktoken-go-loader"
 
-	"github.com/chandrashekhartata/acgc/internal/llm"
+	"github.com/shekhartata/acgcProject/internal/llm"
 )
 
 // offlineOnce installs the embedded (offline) BPE vocabulary loader exactly

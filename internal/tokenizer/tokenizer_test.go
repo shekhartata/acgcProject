@@ -3,7 +3,7 @@ package tokenizer
 import (
 	"testing"
 
-	"github.com/chandrashekhartata/acgc/internal/llm"
+	"github.com/shekhartata/acgcProject/internal/llm"
 )
 
 func TestFallbackCounter(t *testing.T) {

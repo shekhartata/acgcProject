@@ -6,10 +6,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/chandrashekhartata/acgc/eval/datasets"
-	"github.com/chandrashekhartata/acgc/internal/domain"
-	"github.com/chandrashekhartata/acgc/internal/llm"
-	"github.com/chandrashekhartata/acgc/internal/tokenizer"
+	"github.com/shekhartata/acgcProject/eval/datasets"
+	"github.com/shekhartata/acgcProject/internal/domain"
+	"github.com/shekhartata/acgcProject/internal/llm"
+	"github.com/shekhartata/acgcProject/internal/tokenizer"
 )
 
 // StrategyInput is the context a ContextStrategy needs to turn a conversation

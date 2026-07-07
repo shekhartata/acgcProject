@@ -3,7 +3,7 @@ package compiler
 import (
 	"testing"
 
-	"github.com/chandrashekhartata/acgc/internal/domain"
+	"github.com/shekhartata/acgcProject/internal/domain"
 )
 
 func TestStabilizeRenderOrder_deterministic(t *testing.T) {

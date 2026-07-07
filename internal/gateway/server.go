@@ -6,12 +6,12 @@ import (
 	"log"
 	"time"
 
-	pb "github.com/chandrashekhartata/acgc/api/proto"
-	"github.com/chandrashekhartata/acgc/internal/domain"
-	"github.com/chandrashekhartata/acgc/internal/gc"
-	"github.com/chandrashekhartata/acgc/internal/llm"
-	"github.com/chandrashekhartata/acgc/internal/session"
-	"github.com/chandrashekhartata/acgc/internal/tokenizer"
+	pb "github.com/shekhartata/acgcProject/api/proto"
+	"github.com/shekhartata/acgcProject/internal/domain"
+	"github.com/shekhartata/acgcProject/internal/gc"
+	"github.com/shekhartata/acgcProject/internal/llm"
+	"github.com/shekhartata/acgcProject/internal/session"
+	"github.com/shekhartata/acgcProject/internal/tokenizer"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 

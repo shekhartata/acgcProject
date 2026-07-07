@@ -7,7 +7,7 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/chandrashekhartata/acgc/internal/domain"
+	"github.com/shekhartata/acgcProject/internal/domain"
 )
 
 const defaultMaxFacts = 16

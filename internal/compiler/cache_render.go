@@ -3,7 +3,7 @@ package compiler
 import (
 	"sort"
 
-	"github.com/chandrashekhartata/acgc/internal/domain"
+	"github.com/shekhartata/acgcProject/internal/domain"
 )
 
 // StabilizeRenderOrder returns selected nodes sorted for cache-stable rendering.

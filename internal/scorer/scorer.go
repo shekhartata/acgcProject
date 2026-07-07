@@ -4,7 +4,7 @@ import (
 	"math"
 	"strings"
 
-	"github.com/chandrashekhartata/acgc/internal/domain"
+	"github.com/shekhartata/acgcProject/internal/domain"
 )
 
 // Weights for the heuristic scoring formula.

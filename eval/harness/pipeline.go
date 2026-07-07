@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/chandrashekhartata/acgc/eval/datasets"
-	"github.com/chandrashekhartata/acgc/internal/llm"
-	"github.com/chandrashekhartata/acgc/internal/tokenizer"
+	"github.com/shekhartata/acgcProject/eval/datasets"
+	"github.com/shekhartata/acgcProject/internal/llm"
+	"github.com/shekhartata/acgcProject/internal/tokenizer"
 )
 
 // StrategyPipeline adapts any ContextStrategy to the Pipeline contract: it

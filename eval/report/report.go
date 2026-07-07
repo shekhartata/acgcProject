@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/chandrashekhartata/acgc/eval/harness"
-	"github.com/chandrashekhartata/acgc/eval/scoring"
+	"github.com/shekhartata/acgcProject/eval/harness"
+	"github.com/shekhartata/acgcProject/eval/scoring"
 )
 
 // Bundle is everything the report writer needs to render the final output.

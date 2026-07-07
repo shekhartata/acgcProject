@@ -8,8 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/chandrashekhartata/acgc/stresstest/fixtures"
-	"github.com/chandrashekhartata/acgc/stresstest/runner"
+	"github.com/shekhartata/acgcProject/stresstest/fixtures"
+	"github.com/shekhartata/acgcProject/stresstest/runner"
 )
 
 func main() {

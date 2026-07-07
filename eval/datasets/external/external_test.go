@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/chandrashekhartata/acgc/eval/datasets"
+	"github.com/shekhartata/acgcProject/eval/datasets"
 )
 
 func mustLoad(t *testing.T, name, path string, opts Options) []datasets.Scenario {

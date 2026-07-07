@@ -8,9 +8,9 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/chandrashekhartata/acgc/eval/datasets"
-	"github.com/chandrashekhartata/acgc/eval/harness"
-	"github.com/chandrashekhartata/acgc/internal/llm"
+	"github.com/shekhartata/acgcProject/eval/datasets"
+	"github.com/shekhartata/acgcProject/eval/harness"
+	"github.com/shekhartata/acgcProject/internal/llm"
 )
 
 const judgeSystemPrompt = `You are a strict, neutral evaluator scoring responses from two AI assistants (labeled A and B) for the same question.

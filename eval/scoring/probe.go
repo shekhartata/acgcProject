@@ -7,8 +7,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/chandrashekhartata/acgc/eval/datasets"
-	"github.com/chandrashekhartata/acgc/eval/harness"
+	"github.com/shekhartata/acgcProject/eval/datasets"
+	"github.com/shekhartata/acgcProject/eval/harness"
 )
 
 // abstainPhrases are phrases that indicate the model is declining to recall a

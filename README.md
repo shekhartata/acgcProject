@@ -185,7 +185,7 @@ import (
     "log"
     "os"
 
-    "github.com/chandrashekhartata/acgc/pkg/acgc"
+    "github.com/shekhartata/acgcProject/pkg/acgc"
 )
 
 func main() {

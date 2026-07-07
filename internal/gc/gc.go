@@ -7,12 +7,12 @@ import (
 	"math"
 	"time"
 
-	"github.com/chandrashekhartata/acgc/internal/domain"
-	"github.com/chandrashekhartata/acgc/internal/facts"
-	"github.com/chandrashekhartata/acgc/internal/scorer"
-	"github.com/chandrashekhartata/acgc/internal/statetree"
-	"github.com/chandrashekhartata/acgc/internal/store"
-	"github.com/chandrashekhartata/acgc/internal/tokenizer"
+	"github.com/shekhartata/acgcProject/internal/domain"
+	"github.com/shekhartata/acgcProject/internal/facts"
+	"github.com/shekhartata/acgcProject/internal/scorer"
+	"github.com/shekhartata/acgcProject/internal/statetree"
+	"github.com/shekhartata/acgcProject/internal/store"
+	"github.com/shekhartata/acgcProject/internal/tokenizer"
 )
 
 type Policy struct {

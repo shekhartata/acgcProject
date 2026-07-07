@@ -3,7 +3,7 @@
 // character-length approximation, which is kept only as a defensive fallback.
 package tokenizer
 
-import "github.com/chandrashekhartata/acgc/internal/llm"
+import "github.com/shekhartata/acgcProject/internal/llm"
 
 // TokenCounter counts tokens for raw text and for chat message slices.
 //

@@ -1,4 +1,4 @@
-module github.com/chandrashekhartata/acgc
+module github.com/shekhartata/acgcProject
 
 go 1.25.0
 
