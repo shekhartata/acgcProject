@@ -28,7 +28,6 @@ type RunRequest struct {
 	TaskId              string                 `protobuf:"bytes,2,opt,name=task_id,json=taskId,proto3" json:"task_id,omitempty"`
 	UserMessage         string                 `protobuf:"bytes,3,opt,name=user_message,json=userMessage,proto3" json:"user_message,omitempty"`
 	TokenBudget         int32                  `protobuf:"varint,4,opt,name=token_budget,json=tokenBudget,proto3" json:"token_budget,omitempty"`
-	Policy              string                 `protobuf:"bytes,5,opt,name=policy,proto3" json:"policy,omitempty"` // "balanced", "aggressive", "conservative"
 	LlmConfig           *LLMConfig             `protobuf:"bytes,6,opt,name=llm_config,json=llmConfig,proto3" json:"llm_config,omitempty"`
 	ConversationHistory []*Message             `protobuf:"bytes,7,rep,name=conversation_history,json=conversationHistory,proto3" json:"conversation_history,omitempty"`
 	unknownFields       protoimpl.UnknownFields
@@ -91,13 +90,6 @@ func (x *RunRequest) GetTokenBudget() int32 {
 		return x.TokenBudget
 	}
 	return 0
-}
-
-func (x *RunRequest) GetPolicy() string {
-	if x != nil {
-		return x.Policy
-	}
-	return ""
 }
 
 func (x *RunRequest) GetLlmConfig() *LLMConfig {
@@ -1403,18 +1395,17 @@ var File_acgc_proto protoreflect.FileDescriptor
 const file_acgc_proto_rawDesc = "" +
 	"\n" +
 	"\n" +
-	"acgc.proto\x12\aacgc.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\x9a\x02\n" +
+	"acgc.proto\x12\aacgc.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\x90\x02\n" +
 	"\n" +
 	"RunRequest\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x17\n" +
 	"\atask_id\x18\x02 \x01(\tR\x06taskId\x12!\n" +
 	"\fuser_message\x18\x03 \x01(\tR\vuserMessage\x12!\n" +
-	"\ftoken_budget\x18\x04 \x01(\x05R\vtokenBudget\x12\x16\n" +
-	"\x06policy\x18\x05 \x01(\tR\x06policy\x121\n" +
+	"\ftoken_budget\x18\x04 \x01(\x05R\vtokenBudget\x121\n" +
 	"\n" +
 	"llm_config\x18\x06 \x01(\v2\x12.acgc.v1.LLMConfigR\tllmConfig\x12C\n" +
-	"\x14conversation_history\x18\a \x03(\v2\x10.acgc.v1.MessageR\x13conversationHistory\"\xb2\x01\n" +
+	"\x14conversation_history\x18\a \x03(\v2\x10.acgc.v1.MessageR\x13conversationHistoryJ\x04\b\x05\x10\x06R\x06policy\"\xb2\x01\n" +
 	"\tLLMConfig\x12\x1a\n" +
 	"\bprovider\x18\x01 \x01(\tR\bprovider\x12\x14\n" +
 	"\x05model\x18\x02 \x01(\tR\x05model\x12\x17\n" +

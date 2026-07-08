@@ -10,13 +10,6 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 )
 
-// Policy presets for garbage collection aggressiveness.
-const (
-	PolicyBalanced     = "balanced"
-	PolicyAggressive   = "aggressive"
-	PolicyConservative = "conservative"
-)
-
 // ContextRuntime is the public SDK interface for ACGC.
 // It connects to the ACGC gRPC server and provides a simple API
 // for running LLM calls through the context garbage collector.
@@ -26,7 +19,6 @@ type ContextRuntime struct {
 	sessionID string
 	taskID    string
 	budget    int32
-	policy    string
 	llmCfg    *pb.LLMConfig
 }
 
@@ -35,7 +27,6 @@ type Config struct {
 	SessionID   string
 	TaskID      string
 	TokenBudget int
-	Policy      string
 	LLM         LLMConfig
 }
 
@@ -61,9 +52,6 @@ func NewContextRuntime(cfg Config) (*ContextRuntime, error) {
 	}
 	if cfg.TokenBudget == 0 {
 		cfg.TokenBudget = 6000
-	}
-	if cfg.Policy == "" {
-		cfg.Policy = PolicyBalanced
 	}
 
 	conn, err := grpc.NewClient(
@@ -92,7 +80,6 @@ func NewContextRuntime(cfg Config) (*ContextRuntime, error) {
 		sessionID: cfg.SessionID,
 		taskID:    cfg.TaskID,
 		budget:    int32(cfg.TokenBudget),
-		policy:    cfg.Policy,
 		llmCfg:    llmCfg,
 	}, nil
 }
@@ -115,7 +102,6 @@ func (r *ContextRuntime) Run(ctx context.Context, userMessage string) (*RunResul
 		TaskId:      r.taskID,
 		UserMessage: userMessage,
 		TokenBudget: r.budget,
-		Policy:      r.policy,
 		LlmConfig:   r.llmCfg,
 	})
 	if err != nil {

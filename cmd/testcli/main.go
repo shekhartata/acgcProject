@@ -105,7 +105,6 @@ func sendMessage(client pb.ACGCServiceClient, sessionID, message string, turn in
 		TaskId:      "interactive-test",
 		UserMessage: message,
 		TokenBudget: 6000,
-		Policy:      "balanced",
 		ConversationHistory: []*pb.Message{
 			{
 				Role:    "system",
