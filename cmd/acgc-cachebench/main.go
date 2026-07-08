@@ -213,7 +213,7 @@ func runIncrementalBench(scenarioID string, nTurns int, stableRender bool, token
 			for _, n := range active {
 				activeTokens += n.TokenCount
 			}
-			if should, reason := collector.ShouldRun(tree, activeTokens); should {
+			if should, reason := collector.ShouldRun(tree, activeTokens, 0); should {
 				preIDs := make(map[string]bool, len(active))
 				for _, n := range active {
 					preIDs[n.NodeID] = true
@@ -440,7 +440,7 @@ func (s *benchSession) ingestTurn(ctx context.Context, t datasets.Turn, j int) {
 	for _, n := range active {
 		activeTokens += n.TokenCount
 	}
-	if should, reason := s.collector.ShouldRun(s.tree, activeTokens); should {
+	if should, reason := s.collector.ShouldRun(s.tree, activeTokens, 0); should {
 		s.collector.Run(ctx, s.tree, reason, lastUser)
 	}
 }

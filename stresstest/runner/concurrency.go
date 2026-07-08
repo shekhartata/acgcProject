@@ -223,7 +223,7 @@ func testGCUnderContention(cfg EngineConfig) ConcurrencyResult {
 				activeTokens += n.TokenCount
 			}
 
-			if shouldRun, reason := collector.ShouldRun(tree, activeTokens); shouldRun {
+			if shouldRun, reason := collector.ShouldRun(tree, activeTokens, 0); shouldRun {
 				collector.Run(context.Background(), tree, reason, nil)
 				atomic.AddInt32(&gcRuns, 1)
 			}
