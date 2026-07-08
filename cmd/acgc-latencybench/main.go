@@ -146,7 +146,6 @@ Example:
 			TaskId:      *taskID,
 			UserMessage: fixture.Probe,
 			TokenBudget: int32(cfg.DefaultTokenBudget),
-			Policy:      "balanced",
 			ConversationHistory: []*pb.Message{
 				{Role: "system", Content: fixture.System},
 			},

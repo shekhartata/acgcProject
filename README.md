@@ -194,7 +194,6 @@ func main() {
         SessionID:   "user-42-chat-2026-07-02", // one per conversation; reuse across turns
         TaskID:      "schema-design",           // logical task within the session
         TokenBudget: 6000,                      // per-session compile/GC cap (overrides server ACGC_TOKEN_BUDGET when > 0)
-        Policy:      acgc.PolicyBalanced,       // or PolicyAggressive / PolicyConservative
         LLM: acgc.LLMConfig{                    // optional — omit to use the server's ACGC_LLM_* config
             Provider: "openai",
             Model:    "gpt-5",
@@ -270,7 +269,7 @@ python -m grpc_tools.protoc -I proto --python_out=. --grpc_python_out=. proto/ac
 npx grpc_tools_node_protoc --ts_out=. --grpc_out=. -I proto proto/acgc.proto
 ```
 
-The integration contract is the same as the SDK: call `Run(session_id, task_id, user_message, token_budget, policy, llm_config)` per user turn, keep `session_id` stable across the conversation.
+The integration contract is the same as the SDK: call `Run(session_id, task_id, user_message, token_budget, llm_config)` per user turn, keep `session_id` stable across the conversation.
 
 ### Interactive test client
 
@@ -535,7 +534,6 @@ Copy `.env.example` to `.env` and set what your path needs. **Minimum for a live
 | `ACGC_GC_MAX_ACTIVE_NODES` | `25` | GC trigger: active node count cap (`0` = off) |
 | `ACGC_GC_SWEEP_HEADROOM_RATIO` | `0.60` | GC trigger when estimated active tokens exceed ratio × budget (`0` = off) |
 | `ACGC_STALE_TURNS` | `15` | Turns before staleness penalty kicks in |
-| `ACGC_GC_INTERVAL` | `5` | Check GC every N turns |
 | `ACGC_SESSION_BUFFER` | `100` | Per-session event channel buffer size |
 | `ACGC_SESSION_IDLE_TIMEOUT` | `1800` | Seconds before idle session is cleaned up |
 | `ACGC_SNAPSHOT_INTERVAL` | `60` | Seconds between state tree snapshots |

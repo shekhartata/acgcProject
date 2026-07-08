@@ -36,7 +36,8 @@ message RunRequest {
   string task_id = 2;
   string user_message = 3;
   int32 token_budget = 4;
-  string policy = 5; // "balanced", "aggressive", "conservative"
+  reserved 5;
+  reserved "policy";
   LLMConfig llm_config = 6;
   repeated Message conversation_history = 7;
 }

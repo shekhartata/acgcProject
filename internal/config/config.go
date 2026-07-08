@@ -38,7 +38,8 @@ type Config struct {
 	// GCSweepHeadroomRatio: soft GC trigger at ratio × DefaultTokenBudget. 0 disables.
 	GCSweepHeadroomRatio float64
 	StaleAfterTurns      int
-	GCCheckInterval      int // check every N turns
+	// GCCheckInterval: reserved for future use; session worker checks GC on every event today.
+	GCCheckInterval int
 
 	// Session management
 	SessionChannelBuffer int
