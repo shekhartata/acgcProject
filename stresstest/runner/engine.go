@@ -171,7 +171,7 @@ func ReplaySession(name string, turns []fixtures.Turn, cfg EngineConfig) Session
 			estimatedActiveTokens += n.TokenCount
 		}
 
-		if shouldRun, reason := collector.ShouldRun(tree, estimatedActiveTokens); shouldRun {
+		if shouldRun, reason := collector.ShouldRun(tree, estimatedActiveTokens, 0); shouldRun {
 			preIDs := make(map[string]bool, len(activeNodes))
 			for _, n := range activeNodes {
 				preIDs[n.NodeID] = true

@@ -67,7 +67,7 @@ func (s *Server) Run(ctx context.Context, req *pb.RunRequest) (*pb.RunResponse, 
 	}
 
 	tCompile := time.Now()
-	compiled := s.sessions.CompilePrompt(sessionID, taskID, req.UserMessage, systemPrompt)
+	compiled := s.sessions.CompilePrompt(sessionID, taskID, req.UserMessage, systemPrompt, int(req.GetTokenBudget()))
 	compileWall := time.Since(tCompile)
 
 	// Select LLM client

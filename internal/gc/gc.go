@@ -92,14 +92,19 @@ func (gc *GarbageCollector) shouldDeferSweepFacts(n *domain.StateNode) bool {
 //  4. Tree depth / width — structural overflow
 //  5. Low average relevance — session content has gone stale
 //  6. Has resolved nodes — opportunistic cleanup
-func (gc *GarbageCollector) ShouldRun(tree *statetree.Tree, estimatedTokens int) (bool, TriggerReason) {
+func (gc *GarbageCollector) ShouldRun(tree *statetree.Tree, estimatedTokens, maxPromptTokens int) (bool, TriggerReason) {
 	_, _, _, _, maxDepth, maxWidth := tree.Stats()
 
-	if estimatedTokens > gc.policy.MaxPromptTokens {
+	budget := maxPromptTokens
+	if budget <= 0 {
+		budget = gc.policy.MaxPromptTokens
+	}
+
+	if budget > 0 && estimatedTokens > budget {
 		return true, ReasonTokenPressure
 	}
-	if gc.policy.SweepHeadroomRatio > 0 && gc.policy.SweepHeadroomRatio < 1.0 && gc.policy.MaxPromptTokens > 0 {
-		softLimit := int(float64(gc.policy.MaxPromptTokens) * gc.policy.SweepHeadroomRatio)
+	if gc.policy.SweepHeadroomRatio > 0 && gc.policy.SweepHeadroomRatio < 1.0 && budget > 0 {
+		softLimit := int(float64(budget) * gc.policy.SweepHeadroomRatio)
 		if estimatedTokens > softLimit {
 			return true, ReasonSoftHeadroom
 		}

@@ -112,7 +112,7 @@ func (s *acgcStrategy) BuildPrompt(in StrategyInput) (StrategyOutput, error) {
 		for _, n := range active {
 			activeTokens += n.TokenCount
 		}
-		if should, reason := collector.ShouldRun(tree, activeTokens); should {
+		if should, reason := collector.ShouldRun(tree, activeTokens, 0); should {
 			preIDs := make(map[string]bool, len(active))
 			for _, n := range active {
 				preIDs[n.NodeID] = true

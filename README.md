@@ -193,7 +193,7 @@ func main() {
         ServerAddr:  "localhost:50051",
         SessionID:   "user-42-chat-2026-07-02", // one per conversation; reuse across turns
         TaskID:      "schema-design",           // logical task within the session
-        TokenBudget: 6000,                      // compiled prompt budget
+        TokenBudget: 6000,                      // per-session compile/GC cap (overrides server ACGC_TOKEN_BUDGET when > 0)
         Policy:      acgc.PolicyBalanced,       // or PolicyAggressive / PolicyConservative
         LLM: acgc.LLMConfig{                    // optional — omit to use the server's ACGC_LLM_* config
             Provider: "openai",
@@ -446,7 +446,7 @@ After sweep, **`internal/session`** reconciles semantic indexes: embeddings for 
 
 ### Prompt Compilation
 
-The compiler (`internal/compiler`) builds **`FinalPrompt`**: Markdown sections (**`## Active Goals`**, **`## Constraints`**, **`## Key Decisions`**, **`## Prior Context`**, …) joined by `\n\n---\n\n`, **within `ACGC_TOKEN_BUDGET`**.
+The compiler (`internal/compiler`) builds **`FinalPrompt`**: Markdown sections (**`## Active Goals`**, **`## Constraints`**, **`## Key Decisions`**, **`## Prior Context`**, …) joined by `\n\n---\n\n`, **within the session token budget** (server default `ACGC_TOKEN_BUDGET`, overridable per session from the client on each `Run`).
 
 **Reservation & priority:** Estimated tokens reserve **system** + **imminent user message** first so the structured body fits what the API will actually send. **All buckets**, including goals and constraints, participate in **`selectWithinBudget`** in priority order (goals → constraints → decisions → compressed → tool outputs → issues → remainder) so nothing bypasses the cap.
 
@@ -527,7 +527,7 @@ Copy `.env.example` to `.env` and set what your path needs. **Minimum for a live
 | `ACGC_SUMMARIZER_PROVIDER` | `openai` | Summarizer LLM provider |
 | `ACGC_SUMMARIZER_MODEL` | `gpt-4o-mini` | Model for LLM-based branch compression |
 | `ACGC_SUMMARIZER_API_KEY` | (empty) | API key for summarizer (falls back to simple compression if empty) |
-| `ACGC_TOKEN_BUDGET` | `6000` | Default token budget per compiled prompt |
+| `ACGC_TOKEN_BUDGET` | `6000` | Default token budget for new sessions (compile + GC). Clients may override per session via `RunRequest.token_budget` / SDK `TokenBudget`. |
 | `ACGC_MAX_TREE_DEPTH` | `10` | GC trigger: max tree depth |
 | `ACGC_MAX_CHILDREN` | `50` | GC trigger: max children per node |
 | `ACGC_LOW_RELEVANCE` | `0.30` | GC trigger: sweep when average retention across actives falls below this |

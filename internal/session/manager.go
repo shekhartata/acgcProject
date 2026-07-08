@@ -31,6 +31,10 @@ type SessionState struct {
 	ActiveIndex       vectorindex.Index
 	ArchiveIndex      vectorindex.Index
 	LastUserEmbedding []float32
+
+	// TokenBudget is the effective compile/GC cap for this session. Seeded from
+	// the server default; updated when Run sends token_budget > 0.
+	TokenBudget int
 }
 
 type Manager struct {
@@ -39,7 +43,7 @@ type Manager struct {
 	store          *store.MongoStore
 	scorer         *scorer.Scorer
 	gc             *gc.GarbageCollector
-	compilerBudget int
+	defaultBudget  int
 	tokenCounter   tokenizer.TokenCounter
 	channelBuffer  int
 	idleTimeout    time.Duration
@@ -96,9 +100,9 @@ func NewManager(cfg ManagerConfig) *Manager {
 		sessions:         make(map[string]*SessionState),
 		store:            cfg.Store,
 		scorer:           cfg.Scorer,
-		gc:               cfg.GC,
-		compilerBudget:   cfg.TokenBudget,
-		tokenCounter:     tc,
+		gc:                cfg.GC,
+		defaultBudget:     cfg.TokenBudget,
+		tokenCounter:      tc,
 		channelBuffer:    cfg.ChannelBuffer,
 		idleTimeout:      time.Duration(cfg.IdleTimeoutS) * time.Second,
 		snapshotEvery:    time.Duration(cfg.SnapshotEveryS) * time.Second,
@@ -112,12 +116,25 @@ func NewManager(cfg ManagerConfig) *Manager {
 	}
 }
 
-func (m *Manager) newCompiler() *compiler.Compiler {
-	comp := compiler.NewCompilerWithCounter(m.compilerBudget, m.tokenCounter)
+func (m *Manager) newCompiler(budget int) *compiler.Compiler {
+	comp := compiler.NewCompilerWithCounter(budget, m.tokenCounter)
 	if m.cacheStableRender {
 		comp.WithCacheStableRender(true)
 	}
 	return comp
+}
+
+// effectiveBudget resolves the compile/GC token cap. requestBudget > 0 updates
+// the session and wins; otherwise the session's stored budget or server default.
+func (m *Manager) effectiveBudget(state *SessionState, requestBudget int) int {
+	if requestBudget > 0 {
+		state.TokenBudget = requestBudget
+		return requestBudget
+	}
+	if state != nil && state.TokenBudget > 0 {
+		return state.TokenBudget
+	}
+	return m.defaultBudget
 }
 
 func (m *Manager) semanticEnabled() bool {
@@ -166,6 +183,7 @@ func (m *Manager) GetOrCreate(ctx context.Context, sessionID, taskID string) *Se
 		EventChan:    make(chan *domain.Event, m.channelBuffer),
 		LastActivity: time.Now(),
 		Cancel:       cancel,
+		TokenBudget:  m.defaultBudget,
 	}
 
 	// Build the per-session HNSW index if semantic scoring is enabled.
@@ -206,13 +224,17 @@ func (m *Manager) GetOrCreate(ctx context.Context, sessionID, taskID string) *Se
 // queried against the per-session ActiveIndex and ArchiveIndex. The compiler
 // re-blends scores in a single pass, boosting nodes semantically close to the
 // current query — including archived nodes when they match.
-func (m *Manager) CompilePrompt(sessionID, taskID, userMessage, systemPrompt string) *domain.CompiledPrompt {
+func (m *Manager) CompilePrompt(sessionID, taskID, userMessage, systemPrompt string, requestBudget int) *domain.CompiledPrompt {
 	if m.latencyBreakdown {
-		return m.compilePromptMeasured(sessionID, taskID, userMessage, systemPrompt)
+		return m.compilePromptMeasured(sessionID, taskID, userMessage, systemPrompt, requestBudget)
 	}
-	m.mu.RLock()
+	m.mu.Lock()
 	state, ok := m.sessions[sessionID]
-	m.mu.RUnlock()
+	var budget int
+	if ok {
+		budget = m.effectiveBudget(state, requestBudget)
+	}
+	m.mu.Unlock()
 
 	if !ok {
 		// Session-not-found fallback: keep system + probe on the side so
@@ -233,7 +255,7 @@ func (m *Manager) CompilePrompt(sessionID, taskID, userMessage, systemPrompt str
 	}
 
 	activeNodes := state.Tree.GetActiveNodes()
-	comp := m.newCompiler()
+	comp := m.newCompiler(budget)
 
 	// Heuristic-only fast path: no embedder, no index, or no user message.
 	if !m.semanticEnabled() || state.ActiveIndex == nil || state.ArchiveIndex == nil || userMessage == "" {
@@ -270,12 +292,16 @@ func (m *Manager) CompilePrompt(sessionID, taskID, userMessage, systemPrompt str
 		systemPrompt, m.semanticWeight, merged)
 }
 
-func (m *Manager) compilePromptMeasured(sessionID, taskID, userMessage, systemPrompt string) *domain.CompiledPrompt {
+func (m *Manager) compilePromptMeasured(sessionID, taskID, userMessage, systemPrompt string, requestBudget int) *domain.CompiledPrompt {
 	compileOuter := time.Now()
 
-	m.mu.RLock()
+	m.mu.Lock()
 	state, ok := m.sessions[sessionID]
-	m.mu.RUnlock()
+	var budget int
+	if ok {
+		budget = m.effectiveBudget(state, requestBudget)
+	}
+	m.mu.Unlock()
 
 	if !ok {
 		return &domain.CompiledPrompt{
@@ -294,7 +320,7 @@ func (m *Manager) compilePromptMeasured(sessionID, taskID, userMessage, systemPr
 	bd := &domain.CompileLatencyBreakdown{}
 
 	activeNodes := state.Tree.GetActiveNodes()
-	comp := m.newCompiler()
+	comp := m.newCompiler(budget)
 
 	if !m.semanticEnabled() || state.ActiveIndex == nil || state.ArchiveIndex == nil || userMessage == "" {
 		tAsm := time.Now()
@@ -478,7 +504,7 @@ func (m *Manager) processEvent(_ context.Context, sessionID string, state *Sessi
 	for _, n := range activeNodes {
 		estimatedTokens += n.TokenCount
 	}
-	if shouldRun, reason := m.gc.ShouldRun(state.Tree, estimatedTokens); shouldRun {
+	if shouldRun, reason := m.gc.ShouldRun(state.Tree, estimatedTokens, state.TokenBudget); shouldRun {
 		// Capture pre-GC active set so we can diff against post-GC to
 		// figure out which IDs were swept/archived (and remove them from
 		// the HNSW index).
