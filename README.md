@@ -4,7 +4,7 @@
 
 Licensed under the [Apache License, Version 2.0](LICENSE).
 
-A Go sidecar runtime that sits between an AI agent and its LLM, intercepting every interaction to build a structured context model. It scores relevance (**heuristic + optional semantic / embeddings**), prunes stale information, compresses resolved branches, and compiles only the most useful context into each LLM call — optionally **pulling archived nodes back into the prompt** via dual **HNSW** indexes — reducing token costs, lowering latency, and improving recall on long-range and topic-switching sessions. It scores relevance (**heuristic + optional semantic / embeddings**), prunes stale information, compresses resolved branches, and compiles only the most useful context into each LLM call — optionally **pulling archived nodes back into the prompt** via dual **HNSW** indexes — reducing token costs, lowering latency, and improving recall on long-range and topic-switching sessions.
+A Go sidecar between your agent and its LLM that builds structured session memory, scores and compacts it, and **compiles a budget-fitting prompt each turn** — optionally **retrieving archived turns** via semantic search (dual HNSW) so long-range facts and constraints still reach the model, while using fewer tokens than sending full history verbatim.
 
 **How it plugs in** — your app stops sending the full conversation history to the LLM; ACGC takes that over:
 
@@ -58,13 +58,15 @@ A Go sidecar runtime that sits between an AI agent and its LLM, intercepting eve
 
 ## Why ACGC (the problem)
 
-LLM-powered agents accumulate context over long conversations — user messages, assistant responses, tool calls, tool results, errors, retries. Without management, this context grows unbounded:
+LLM-powered agents accumulate context over long conversations — user messages, assistant responses, tool calls, tool results, errors, retries. Every production agent also hits a **context budget**; the problem is not just size, but **what fits**:
 
-- **Token bloat**: Sending the entire conversation history gets expensive fast. A 60-turn session can easily hit 10,000+ tokens per call.
-- **Noise**: Old resolved issues, failed attempts, and redundant information dilute the signal. The LLM starts contradicting earlier decisions or forgetting constraints.
-- **Latency**: More input tokens = slower responses, especially with reasoning models (GPT-5, o3) that scale processing time with input size.
+- **Budget ceiling**: Verbatim history stops fitting (a 60-turn session can exceed 10,000 tokens). Something must be selected, compressed, or dropped every call.
+- **Wrong window**: Pure recency heuristics drop old constraints and facts; sending everything adds noise — resolved issues, failed attempts, redundant tool output.
+- **Buried decisions**: Goals and constraints stated early disappear from the prompt even though the agent still must honor them.
 
-ACGC solves this by treating context like memory in a running program — actively managing what stays, what gets compressed, and what gets archived.
+ACGC treats session context like managed memory: score what matters, compress or archive the rest, and **each `Run` assembles the highest-value nodes that fit the budget** — including semantically relevant archived content when the current question needs it.
+
+Best fit: **long or multi-session agents** where answers live in older turns (see [External benchmark evaluation](#external-benchmark-evaluation)); for short dense chats already near budget, a recency window may suffice.
 
 ---
 
@@ -77,7 +79,7 @@ Different goals need different amounts of setup. Pick the row that matches yours
 | Sanity-check the pipeline and see token savings | [1. Smoke test](#path-1--smoke-test-no-keys-no-database) | No | No | ~2 min |
 | Chat with it live and watch GC/token stats per turn | [2. Live demo](#path-2--live-demo-server--test-client) | Yes | Yes | ~5 min |
 | Wire it into my own agent | [3. Integrate](#path-3--integrate-into-your-app) | Yes | Yes | ~10 min |
-| See quality/latency numbers vs naive baselines | [4. Benchmark](#path-4--benchmark-it) | Depends | Mostly yes | varies |
+| See quality and token-cost numbers vs naive baselines | [4. Benchmark](#path-4--benchmark-it) | Depends | Mostly yes | varies |
 
 **Prerequisites:** Go 1.25+. MongoDB only for paths 2–3 (local via `docker compose up -d mongodb`, or Atlas). `protoc` + Go gRPC plugins only if you regenerate protos.
 
