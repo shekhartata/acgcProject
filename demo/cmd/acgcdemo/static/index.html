@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>ACGC Demo — Naive vs Budgeted Sidecar</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <header class="top">
+    <div>
+      <h1>ACGC Demo</h1>
+      <p class="subtitle" id="subtitle">Same conversation. Same budget. Different context strategy.</p>
+    </div>
+    <div class="meta">
+      <span id="metaBudget">budget=—</span>
+      <span id="metaModel">model=—</span>
+      <span id="metaProgress">turns —</span>
+    </div>
+    <div class="actions">
+      <button id="btnStart" type="button">Start</button>
+      <button id="btnNext" type="button" disabled>Next</button>
+      <button id="btnPlay" type="button" disabled>Play</button>
+      <button id="btnProbe" type="button" disabled>Probe</button>
+      <button id="btnReset" type="button" disabled>Reset</button>
+    </div>
+  </header>
+
+  <main class="panes">
+    <section class="pane" id="paneNaive">
+      <h2>Naive (full history)</h2>
+      <p class="hint">Sends growing full history each turn.</p>
+      <div class="stats" id="naiveStats">—</div>
+      <div class="chat" id="naiveChat"></div>
+      <details>
+        <summary>Show prompt</summary>
+        <pre class="preview" id="naivePreview"></pre>
+      </details>
+    </section>
+    <section class="pane" id="paneAcgc">
+      <h2>ACGC (budgeted sidecar)</h2>
+      <p class="hint">Compiles scored/compressed context into the budget via gRPC.</p>
+      <div class="stats" id="acgcStats">—</div>
+      <div class="chat" id="acgcChat"></div>
+      <details>
+        <summary>Show compiled prompt / stats</summary>
+        <pre class="preview" id="acgcPreview"></pre>
+      </details>
+    </section>
+  </main>
+
+  <footer class="foot">
+    <p id="takeaway">Start a session, step through warm turns, then run the recall probe.</p>
+    <p class="err" id="error"></p>
+  </footer>
+
+  <script src="/app.js"></script>
+</body>
+</html>
