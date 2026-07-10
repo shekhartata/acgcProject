@@ -14,6 +14,7 @@ type acgcPane struct {
 	budget       int
 	transcript   []ChatLine
 	systemPrompt string
+	seededEvents int
 }
 
 func newACGCPane(rt *acgc.ContextRuntime, budget int, systemPrompt string) *acgcPane {
@@ -26,13 +27,50 @@ func (a *acgcPane) seed(ctx context.Context, role, content string) error {
 	if role == "assistant" {
 		eventType = "llm_response"
 	}
-	_, err := a.rt.CaptureEvent(ctx, eventType, content, nil)
-	if err != nil {
+	if _, err := a.rt.CaptureEvent(ctx, eventType, content, nil); err != nil {
 		return err
 	}
-	// Give the session worker a moment to process the event channel.
-	time.Sleep(40 * time.Millisecond)
+	a.seededEvents++
 	return nil
+}
+
+// waitForSeededNodes blocks until GetState reports at least root + seeded event nodes.
+// Under semantic embed latency (or 429s) each event can take hundreds of ms, so we
+// allow a long deadline and keep waiting while the node count is still climbing.
+func (a *acgcPane) waitForSeededNodes(ctx context.Context) error {
+	minTotal := a.seededEvents + 1 // root + one node per CaptureEvent
+	deadline := time.Now().Add(90 * time.Second)
+	stallLimit := 8 * time.Second
+	var lastTotal int32
+	lastProgress := time.Now()
+	for time.Now().Before(deadline) {
+		st, err := a.rt.GetState(ctx)
+		if err != nil {
+			return fmt.Errorf("get state while waiting for seed: %w", err)
+		}
+		if ts := st.GetTreeStats(); ts != nil {
+			n := ts.GetTotalNodes()
+			if n > lastTotal {
+				lastTotal = n
+				lastProgress = time.Now()
+			}
+			if int(lastTotal) >= minTotal {
+				return nil
+			}
+			// Channel drained / worker stuck — don't burn the full deadline.
+			if lastTotal > 0 && time.Since(lastProgress) > stallLimit {
+				return fmt.Errorf("ACGC seed stalled at %d/%d nodes (no progress for %s); check server logs for dropped events or embed errors",
+					lastTotal, minTotal, stallLimit)
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+	return fmt.Errorf("timeout waiting for ACGC seed: have %d nodes, want >= %d (seeded %d events)",
+		lastTotal, minTotal, a.seededEvents)
 }
 
 func (a *acgcPane) run(ctx context.Context, userMessage string) (assistant string, stats ACGCStats) {
@@ -61,7 +99,6 @@ func (a *acgcPane) run(ctx context.Context, userMessage string) (assistant strin
 			result.ActiveNodes, result.CompressedNodes, result.ArchivedNodes)
 
 	a.transcript = append(a.transcript, ChatLine{Role: "assistant", Content: assistant})
-	time.Sleep(40 * time.Millisecond) // allow async ingest of Run's user/assistant events
 	return assistant, stats
 }
 

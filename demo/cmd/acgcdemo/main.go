@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 
 	demo "github.com/shekhartata/acgcProject/demo/internal"
 	"github.com/shekhartata/acgcProject/internal/config"
@@ -19,7 +20,7 @@ func main() {
 	log.SetFlags(0)
 	addr := flag.String("addr", ":8080", "HTTP listen address")
 	acgcAddr := flag.String("acgc", "", "ACGC gRPC address (default localhost:50051 or ACGC_DEMO_ACGC_ADDR)")
-	budget := flag.Int("budget", 0, "token budget override (default ACGC_TOKEN_BUDGET)")
+	budget := flag.Int("budget", 0, "token budget override (default 1800 or ACGC_DEMO_TOKEN_BUDGET)")
 	flag.Parse()
 
 	cfg := config.Load()
@@ -34,9 +35,19 @@ func main() {
 	if grpcAddr == "" {
 		grpcAddr = "localhost:50051"
 	}
+
 	tokBudget := *budget
 	if tokBudget <= 0 {
-		tokBudget = cfg.DefaultTokenBudget
+		// Prefer a tight demo budget over the server default (6000) so the
+		// newest-first naive pane actually drops early decisions.
+		if v := os.Getenv("ACGC_DEMO_TOKEN_BUDGET"); v != "" {
+			if n, err := strconv.Atoi(v); err == nil && n > 0 {
+				tokBudget = n
+			}
+		}
+		if tokBudget <= 0 {
+			tokBudget = 1800
+		}
 	}
 
 	engine := demo.NewEngine(demo.EngineConfig{
@@ -46,7 +57,7 @@ func main() {
 		LLMBaseURL:  cfg.DefaultLLMBaseURL,
 		LLMAPIKey:   cfg.DefaultLLMAPIKey,
 		LLMModel:    cfg.DefaultLLMModel,
-		MaxTokens:   512,
+		MaxTokens:   2048,
 	})
 
 	mux := http.NewServeMux()
@@ -62,7 +73,7 @@ func main() {
 	log.Printf("ACGC marketing demo on http://localhost%s", *addr)
 	log.Printf("  ACGC sidecar: %s", grpcAddr)
 	log.Printf("  budget=%d model=%s", tokBudget, cfg.DefaultLLMModel)
-	log.Printf("  Prerequisites: MongoDB + ./bin/acgc must be running")
+	log.Printf("  Prerequisites: MongoDB + ./bin/acgc must be running (rebuild after server fixes)")
 	if err := http.ListenAndServe(*addr, mux); err != nil {
 		log.Fatal(err)
 	}

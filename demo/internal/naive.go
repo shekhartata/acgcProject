@@ -10,22 +10,29 @@ import (
 )
 
 // naivePane holds growing full-history state and calls the LLM directly.
+// Context fill is newest-first (sliding window) so early decisions fall off
+// once history exceeds the shared token budget — the contrast ACGC is meant to win.
 type naivePane struct {
 	client       *llm.Client
 	counter      tokenizer.TokenCounter
 	systemPrompt string
 	budget       int
+	maxTokens    int
 	history      []llm.ChatMessage // user/assistant only (system separate)
 	transcript   []ChatLine
 	cumPrompt    int
 }
 
-func newNaivePane(client *llm.Client, counter tokenizer.TokenCounter, systemPrompt string, budget int) *naivePane {
+func newNaivePane(client *llm.Client, counter tokenizer.TokenCounter, systemPrompt string, budget, maxTokens int) *naivePane {
+	if maxTokens <= 0 {
+		maxTokens = 2048
+	}
 	return &naivePane{
 		client:       client,
 		counter:      counter,
 		systemPrompt: systemPrompt,
 		budget:       budget,
+		maxTokens:    maxTokens,
 	}
 }
 
@@ -40,29 +47,38 @@ func (n *naivePane) buildMessages(question string) (msgs []llm.ChatMessage, prev
 		msgs = append(msgs, llm.ChatMessage{Role: "system", Content: n.systemPrompt})
 	}
 
-	// Chronological oldest-first fill within budget (eval naive_full_history).
+	// Newest-first fill within budget (sliding window). Stop when the next
+	// older message no longer fits so early decisions are dropped under pressure.
 	reserve := n.counter.Count(n.systemPrompt) + n.counter.Count(question)
 	remaining := n.budget - reserve
 	if remaining < 0 {
 		remaining = 0
 	}
 
-	var body strings.Builder
-	body.WriteString("## Conversation Context\n")
+	selected := make([]llm.ChatMessage, 0, len(n.history))
 	used := 0
-	included := 0
-	for _, m := range n.history {
+	for i := len(n.history) - 1; i >= 0; i-- {
+		m := n.history[i]
 		cost := n.counter.Count(m.Content) + 8 // role/framing overhead approx
 		if used+cost > remaining {
-			continue
+			break
 		}
-		body.WriteString(fmt.Sprintf("- [%s] %s\n", m.Role, m.Content))
+		selected = append(selected, m)
 		used += cost
-		included++
+	}
+	// Restore chronological order for the prompt body.
+	for i, j := 0, len(selected)-1; i < j; i, j = i+1, j-1 {
+		selected[i], selected[j] = selected[j], selected[i]
+	}
+
+	var body strings.Builder
+	body.WriteString("## Conversation Context\n")
+	for _, m := range selected {
+		body.WriteString(fmt.Sprintf("- [%s] %s\n", m.Role, m.Content))
 	}
 
 	finalPrompt := ""
-	if included > 0 {
+	if len(selected) > 0 {
 		finalPrompt = body.String()
 		msgs = append(msgs, llm.ChatMessage{Role: "user", Content: finalPrompt})
 	}
@@ -97,7 +113,7 @@ func (n *naivePane) run(ctx context.Context, userMessage string) (assistant stri
 	stats.PromptPreview = preview
 	stats.HistoryMsgs = len(n.history) + 1 // + current user (not yet in history)
 
-	result, err := n.client.Generate(ctx, msgs, 0.3, 512)
+	result, err := n.client.Generate(ctx, msgs, 0.3, n.maxTokens)
 	if err != nil {
 		stats.Error = err.Error()
 		stats.PromptTokens = estTokens

@@ -117,7 +117,7 @@ Type messages and watch token savings, GC triggers, and compiled-prompt stats af
 
 ### Path 2b — Marketing demo UI (Naive vs ACGC)
 
-Side-by-side browser demo: **Naive (full history)** vs **ACGC (budgeted sidecar)** on a scripted deep-history slice, then a recall probe. The demo app talks to ACGC over gRPC via `pkg/acgc` — same integration shape as a production agent.
+Side-by-side browser demo: **Naive (newest-first window)** vs **ACGC (budgeted sidecar)** on a scripted deep-history slice, then a recall probe. The demo app talks to ACGC over gRPC via `pkg/acgc` — same integration shape as a production agent.
 
 ```bash
 # Terminal 1: Mongo + ACGC server (same as Path 2)
@@ -129,7 +129,9 @@ go run ./demo/cmd/acgcdemo
 # open http://localhost:8080 → Start → Play → Probe
 ```
 
-Optional flags: `-addr :8080`, `-acgc localhost:50051`, `-budget 6000`.
+Optional flags: `-addr :8080`, `-acgc localhost:50051`, `-budget 1800` (tight default so naive’s newest-first window drops early decisions). Env: `ACGC_DEMO_TOKEN_BUDGET`, `ACGC_DEMO_ACGC_ADDR`.
+
+**Rebuild `./bin/acgc` after pulling** — the demo depends on the session worker surviving past each gRPC call.
 
 ### Path 3 — Integrate into your app
 

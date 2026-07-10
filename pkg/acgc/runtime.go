@@ -137,6 +137,7 @@ func (r *ContextRuntime) GetState(ctx context.Context) (*pb.GetStateResponse, er
 }
 
 // CaptureEvent manually captures an event into the session context.
+// Returns an error if the server rejects the event (e.g. session channel full).
 func (r *ContextRuntime) CaptureEvent(ctx context.Context, eventType, payload string, metadata map[string]string) (string, error) {
 	resp, err := r.client.CaptureEvent(ctx, &pb.CaptureEventRequest{
 		SessionId: r.sessionID,
@@ -148,7 +149,10 @@ func (r *ContextRuntime) CaptureEvent(ctx context.Context, eventType, payload st
 	if err != nil {
 		return "", fmt.Errorf("acgc capture: %w", err)
 	}
-	return resp.EventId, nil
+	if resp != nil && !resp.GetAccepted() {
+		return resp.GetEventId(), fmt.Errorf("acgc capture: event not accepted (session channel full or session missing)")
+	}
+	return resp.GetEventId(), nil
 }
 
 // TriggerGC manually triggers garbage collection for this session.

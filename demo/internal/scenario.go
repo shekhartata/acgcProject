@@ -11,12 +11,13 @@ const systemPrompt = "You are a helpful technical assistant. Answer concisely an
 
 // Scenario is the curated marketing demo script.
 type Scenario struct {
-	ID           string   `json:"id"`
-	Name         string   `json:"name"`
-	Description  string   `json:"description"`
-	Turns        []Turn   `json:"turns"`
-	Probe        Probe    `json:"probe"`
-	WarmUserSteps int     `json:"warm_user_steps"`
+	ID            string `json:"id"`
+	Name          string `json:"name"`
+	Description   string `json:"description"`
+	Turns         []Turn `json:"turns"`
+	Probe         Probe  `json:"probe"`
+	SeedUntil     int    `json:"seed_until"`      // ingest Turns[0:SeedUntil] without live LLM
+	WarmUserSteps int    `json:"warm_user_steps"` // live Next() user turns after seed
 }
 
 // Turn is a scripted message.
@@ -32,7 +33,8 @@ type Probe struct {
 }
 
 // LoadScenario returns the marketing demo slice derived from deep_history_recall_1.
-// It keeps the four early decisions, a handful of large filler pairs, then probe p1.
+// Decisions + bulk filler are seeded (no live LLM); a few filler user turns run live
+// so the UI shows activity, then the CockroachDB probe fires.
 func LoadScenario() Scenario {
 	src := datasets.ByID("deep_history_recall_1")
 	if src == nil {
@@ -45,20 +47,25 @@ func LoadScenario() Scenario {
 		panic("deep_history_recall_1 too short")
 	}
 
-	turns := make([]Turn, 0, 24)
-	for _, t := range src.Turns[:decisionEnd] {
+	// Seed enough large filler that newest-first naive at ~1800 tokens drops early decisions.
+	// Keep this modest: each CaptureEvent is processed serially on the server (and embeds
+	// add latency when ACGC_SEMANTIC_ENABLED=true), so huge seeds make Start feel hung.
+	const fillerSeedTurns = 24 // 12 Q/A pairs
+	const liveWarmPairs = 3    // 3 live user turns for the UI
+
+	need := decisionEnd + fillerSeedTurns + liveWarmPairs*2
+	if len(src.Turns) < need {
+		panic(fmt.Sprintf("deep_history_recall_1 too short: have %d need %d", len(src.Turns), need))
+	}
+
+	turns := make([]Turn, 0, need)
+	for _, t := range src.Turns[:need] {
 		turns = append(turns, Turn{Role: t.Role, Content: t.Content})
 	}
 
-	// Append 5 large filler Q/A pairs (~10 turns) so naive history grows past a tight budget.
-	fillerCount := 0
-	for i := decisionEnd; i < len(src.Turns) && fillerCount < 10; i++ {
-		turns = append(turns, Turn{Role: src.Turns[i].Role, Content: src.Turns[i].Content})
-		fillerCount++
-	}
-
+	seedUntil := decisionEnd + fillerSeedTurns
 	warmUsers := 0
-	for i := decisionEnd; i < len(turns); i++ {
+	for i := seedUntil; i < len(turns); i++ {
 		if turns[i].Role == "user" {
 			warmUsers++
 		}
@@ -78,9 +85,10 @@ func LoadScenario() Scenario {
 	return Scenario{
 		ID:            "demo_deep_history_slice",
 		Name:          "Deep-history recall (demo slice)",
-		Description:   "Four early decisions, then filler turns that stress a shared token budget. Probe asks for CockroachDB.",
+		Description:   "Four early decisions buried under seeded filler past a tight budget; naive uses a newest-first window. Probe asks for CockroachDB.",
 		Turns:         turns,
 		Probe:         probe,
+		SeedUntil:     seedUntil,
 		WarmUserSteps: warmUsers,
 	}
 }
@@ -100,13 +108,13 @@ func HitNeedle(answer string, expectedAny []string) bool {
 func Takeaway(naiveHit, acgcHit bool) string {
 	switch {
 	case naiveHit && acgcHit:
-		return "Both recalled — compare tokens."
+		return "Both recalled — compare tokens (ACGC should use fewer)."
 	case acgcHit && !naiveHit:
-		return "ACGC kept the early decision inside budget."
+		return "ACGC kept the early decision inside budget; naive's newest-first window dropped it."
 	case naiveHit && !acgcHit:
-		return "Investigate — demo scenario/budget may need tuning."
+		return "Naive recalled but ACGC missed — check sidecar seeding (GetState node count) and that ./bin/acgc was rebuilt."
 	default:
-		return "Neither pane hit the needle — check model/API and scenario seeding."
+		return "Neither pane hit the needle — check model/API keys, MaxTokens, and scenario seeding."
 	}
 }
 

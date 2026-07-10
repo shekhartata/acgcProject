@@ -21,6 +21,10 @@ var knownEntities = []string{
 	"MongoDB",
 	"Kafka",
 	"Kubernetes",
+	"CockroachDB",
+	"Cockroach",
+	"RabbitMQ",
+	"DataMatrix",
 }
 
 var reADR = regexp.MustCompile(`(?i)\bADR[-_]?\d+\b`)

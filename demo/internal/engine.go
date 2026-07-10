@@ -47,13 +47,14 @@ type Session struct {
 // NewEngine creates a demo engine.
 func NewEngine(cfg EngineConfig) *Engine {
 	if cfg.TokenBudget <= 0 {
-		cfg.TokenBudget = 6000
+		// Tight default so newest-first naive drops early decisions under filler pressure.
+		cfg.TokenBudget = 1800
 	}
 	if cfg.ACGCAddr == "" {
 		cfg.ACGCAddr = "localhost:50051"
 	}
 	if cfg.MaxTokens <= 0 {
-		cfg.MaxTokens = 512
+		cfg.MaxTokens = 2048
 	}
 	return &Engine{
 		cfg:      cfg,
@@ -106,7 +107,7 @@ func (e *Engine) Start(ctx context.Context, req StartRequest) (*StartResponse, e
 		Budget:   budget,
 		Model:    e.cfg.LLMModel,
 		Scenario: sc,
-		naive:    newNaivePane(llmClient, counter, systemPrompt, budget),
+		naive:    newNaivePane(llmClient, counter, systemPrompt, budget, e.cfg.MaxTokens),
 		acgc:     newACGCPane(rt, budget, systemPrompt),
 	}
 
@@ -272,15 +273,15 @@ func (e *Engine) Reset(req ResetRequest) error {
 	return nil
 }
 
-// ensureSeeded ingests kickoff + decision Q/A into both panes without live LLM calls.
+// ensureSeeded ingests decisions + bulk filler into both panes without live LLM calls.
 func (s *Session) ensureSeeded(ctx context.Context) error {
 	if s.seeded {
 		return nil
 	}
-	// Seed until just before the first filler user turn (after decision block).
-	// Decision block is first 10 turns; seed all of them.
-	const seedUntil = 10
-	limit := seedUntil
+	limit := s.Scenario.SeedUntil
+	if limit <= 0 {
+		limit = 10
+	}
 	if limit > len(s.Scenario.Turns) {
 		limit = len(s.Scenario.Turns)
 	}
@@ -291,10 +292,11 @@ func (s *Session) ensureSeeded(ctx context.Context) error {
 			return fmt.Errorf("acgc seed turn %d: %w", i, err)
 		}
 	}
+	if err := s.acgc.waitForSeededNodes(ctx); err != nil {
+		return fmt.Errorf("acgc seed settle: %w", err)
+	}
 	s.cursor = limit
 	s.seeded = true
-	// Count seeded user turns toward warm progress display? No — warm steps
-	// are live Next() calls on remaining user turns only.
 	return nil
 }
 

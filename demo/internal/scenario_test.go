@@ -1,11 +1,17 @@
 package demo
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestLoadScenario(t *testing.T) {
 	sc := LoadScenario()
 	if sc.ID == "" {
 		t.Fatal("empty scenario id")
+	}
+	if sc.SeedUntil < 10 {
+		t.Fatalf("seed_until = %d, want >= 10", sc.SeedUntil)
 	}
 	if sc.WarmUserSteps < 3 {
 		t.Fatalf("warm user steps = %d, want >= 3", sc.WarmUserSteps)
@@ -13,9 +19,8 @@ func TestLoadScenario(t *testing.T) {
 	if len(sc.Probe.ExpectedAny) == 0 {
 		t.Fatal("probe expected_any empty")
 	}
-	// First 10 turns are decision block.
-	if len(sc.Turns) < 14 {
-		t.Fatalf("turns = %d, want curated slice", len(sc.Turns))
+	if len(sc.Turns) <= sc.SeedUntil {
+		t.Fatalf("turns=%d seed_until=%d: need live warm turns after seed", len(sc.Turns), sc.SeedUntil)
 	}
 }
 
@@ -31,5 +36,11 @@ func TestHitNeedle(t *testing.T) {
 func TestTakeaway(t *testing.T) {
 	if got := Takeaway(true, true); got == "" {
 		t.Fatal("empty takeaway")
+	}
+	if got := Takeaway(false, true); got == "" {
+		t.Fatal("empty acgc-win takeaway")
+	}
+	if got := Takeaway(true, false); !strings.Contains(got, "ACGC missed") {
+		t.Fatalf("naive-only takeaway = %q", got)
 	}
 }
