@@ -173,7 +173,10 @@ func (m *Manager) GetOrCreate(ctx context.Context, sessionID, taskID string) *Se
 		tree = statetree.NewTree(sessionID, taskID)
 	}
 
-	workerCtx, cancel := context.WithCancel(ctx)
+	// Worker must outlive the creating RPC. Deriving from the gRPC request
+	// ctx cancels the worker when CaptureEvent/Run returns, leaving a zombie
+	// session that accepts enqueues but never processes them.
+	workerCtx, cancel := context.WithCancel(context.Background())
 	state := &SessionState{
 		Tree: tree,
 		Metrics: &domain.SessionMetrics{

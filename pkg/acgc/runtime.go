@@ -93,6 +93,9 @@ type RunResult struct {
 	ReductionPercent float32
 	GCTriggered      bool
 	GCReason         string
+	ActiveNodes      int
+	CompressedNodes  int
+	ArchivedNodes    int
 }
 
 // Run sends a user message through ACGC and returns the optimized LLM response.
@@ -118,11 +121,23 @@ func (r *ContextRuntime) Run(ctx context.Context, userMessage string) (*RunResul
 		result.ReductionPercent = resp.Stats.ReductionPercent
 		result.GCTriggered = resp.Stats.GcTriggered
 		result.GCReason = resp.Stats.GcReason
+		result.ActiveNodes = int(resp.Stats.ActiveNodes)
+		result.CompressedNodes = int(resp.Stats.CompressedNodes)
+		result.ArchivedNodes = int(resp.Stats.ArchivedNodes)
 	}
 	return result, nil
 }
 
+// SessionID returns the stable session id used for all RPCs.
+func (r *ContextRuntime) SessionID() string { return r.sessionID }
+
+// GetState returns tree stats for the current session.
+func (r *ContextRuntime) GetState(ctx context.Context) (*pb.GetStateResponse, error) {
+	return r.client.GetState(ctx, &pb.GetStateRequest{SessionId: r.sessionID})
+}
+
 // CaptureEvent manually captures an event into the session context.
+// Returns an error if the server rejects the event (e.g. session channel full).
 func (r *ContextRuntime) CaptureEvent(ctx context.Context, eventType, payload string, metadata map[string]string) (string, error) {
 	resp, err := r.client.CaptureEvent(ctx, &pb.CaptureEventRequest{
 		SessionId: r.sessionID,
@@ -134,7 +149,10 @@ func (r *ContextRuntime) CaptureEvent(ctx context.Context, eventType, payload st
 	if err != nil {
 		return "", fmt.Errorf("acgc capture: %w", err)
 	}
-	return resp.EventId, nil
+	if resp != nil && !resp.GetAccepted() {
+		return resp.GetEventId(), fmt.Errorf("acgc capture: event not accepted (session channel full or session missing)")
+	}
+	return resp.GetEventId(), nil
 }
 
 // TriggerGC manually triggers garbage collection for this session.

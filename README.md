@@ -78,6 +78,7 @@ Different goals need different amounts of setup. Pick the row that matches yours
 |---|---|---|---|---|
 | Sanity-check the pipeline and see token savings | [1. Smoke test](#path-1--smoke-test-no-keys-no-database) | No | No | ~2 min |
 | Chat with it live and watch GC/token stats per turn | [2. Live demo](#path-2--live-demo-server--test-client) | Yes | Yes | ~5 min |
+| See Naive vs ACGC side-by-side in a browser | [2b. Marketing demo UI](#path-2b--marketing-demo-ui-naive-vs-acgc) | Yes | Yes | ~5 min |
 | Wire it into my own agent | [3. Integrate](#path-3--integrate-into-your-app) | Yes | Yes | ~10 min |
 | See quality and token-cost numbers vs naive baselines | [4. Benchmark](#path-4--benchmark-it) | Depends | Mostly yes | varies |
 
@@ -113,6 +114,24 @@ make testcli
 ```
 
 Type messages and watch token savings, GC triggers, and compiled-prompt stats after each turn (`/state`, `/metrics`, `/gc`, `/quit`).
+
+### Path 2b — Marketing demo UI (Naive vs ACGC)
+
+Side-by-side browser demo: **Naive (newest-first window)** vs **ACGC (budgeted sidecar)** on a scripted deep-history slice, then a recall probe. The demo app talks to ACGC over gRPC via `pkg/acgc` — same integration shape as a production agent.
+
+```bash
+# Terminal 1: Mongo + ACGC server (same as Path 2)
+docker compose up -d mongodb
+make build && ./bin/acgc
+
+# Terminal 2: demo UI (uses ACGC_LLM_* for the naive pane; ACGC server uses its own .env)
+go run ./demo/cmd/acgcdemo
+# open http://localhost:8080 → Start → Play → Probe
+```
+
+Optional flags: `-addr :8080`, `-acgc localhost:50051`, `-budget 1800` (tight default so naive’s newest-first window drops early decisions). Env: `ACGC_DEMO_TOKEN_BUDGET`, `ACGC_DEMO_ACGC_ADDR`.
+
+**Rebuild `./bin/acgc` after pulling** — the demo depends on the session worker surviving past each gRPC call.
 
 ### Path 3 — Integrate into your app
 
@@ -888,6 +907,9 @@ acgcProject/
 │   ├── acgc-cachebench/   # Provider prefix cache OFF vs ON bench (in-process)
 │   ├── acgc-latencybench/ # Wall-clock naive vs gRPC Run comparison
 │   └── testcli/           # Interactive REPL test client
+├── demo/                  # Marketing dual-pane UI (calls ACGC via pkg/acgc gRPC)
+│   ├── cmd/acgcdemo/      # HTTP server + embedded static UI
+│   └── internal/          # Scenario, naive pane, ACGC client, API
 ├── api/proto/             # Generated gRPC Go code
 ├── proto/                 # Protobuf service definitions
 ├── pkg/acgc/              # Public Go SDK (ContextRuntime)
