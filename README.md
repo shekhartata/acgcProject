@@ -647,73 +647,29 @@ Artifacts: `stresstest/results.json` (export from the command above).
 
 ### Latency benchmarking (`acgc-latencybench`)
 
-The **`acgc-latencybench`** binary (`cmd/acgc-latencybench` + `internal/latencybench/`) measures **how long each path takes** under a repeatable fixture: it runs a **naive baseline** (one direct LLM call with the full scripted transcript) and **`Run`** over **gRPC** to a live **`./bin/acgc`** server.
-
-#### Follow these steps
-
-1. **Start MongoDB** (if local): `make mongo`.
-2. **Configure the server** in `.env` or your shell:
-   - **`ACGC_SEMANTIC_ENABLED=true`** + **`ACGC_EMBED_API_KEY`** (or rely on fallback to **`ACGC_LLM_API_KEY`**) when you want semantic compile paths exercised.
-   - **`ACGC_LATENCY_BREAKDOWN=true`** when you want **`RunResponse.latency_breakdown`** filled (`compile_*` buckets + **`llm_ms`**). With it **off**, percentiles for server breakdown stay empty — **not** zero latency.
-3. **Start the daemon**: `make build && ./bin/acgc`.
-4. **Run the bench** (same machine env as eval for **`ACGC_LLM_*`**):
+Compares a **naive** direct LLM call (full scripted transcript) to a live ACGC **`Run`** over gRPC, with optional server **`latency_breakdown`** (`compile_*` + `llm_ms`).
 
 ```bash
-make latency-bench
-./bin/acgc-latencybench -grpc localhost:50051 -iterations 30 -discard-n 5 \
-  -warm-settle-delay 400ms -output json > latency_report.json
+# .env: ACGC_SEMANTIC_ENABLED=true, ACGC_LATENCY_BREAKDOWN=true, ACGC_LLM_* / embed keys
+make build && ./bin/acgc
+./bin/acgc-latencybench -grpc localhost:50051 -iterations 10 -discard-n 0 \
+  -concurrency 1 -warm-settle-delay 400ms -enforce-semantic -output text
 ```
 
-5. **Read the report**: JSON prints to **stdout** (redirect as above). Warnings (e.g. missing breakdown) go to **stderr**.
+`-discard-n N` drops the first N iterations from percentile summaries (cold-start burn-in). See `-h` for more flags.
 
-Use **`./bin/acgc-latencybench -h`** for flags (`-sessions`, `-warm-turns`, `-fixture`, `-concurrency`, `-enforce-semantic`, etc.).
+#### Recorded run (2026-07-11)
 
-#### What each number means
+Semantic on, breakdown on, model **`gpt-5`**, default fixture (2 warm pairs), **10** iterations, concurrency **1**:
 
-| Output bucket | What it actually measures |
-|---------------|---------------------------|
-| **`baseline_llm_ms`** | Client-side wall clock around **one** **`Generate`** call: scripted **system + all warm turns + probe** (no ACGC compile). |
-| **`acgc_run_round_trip_ms`** | Client-side wall clock for the entire **`Run`** RPC = **compile + server LLM + tiny gRPC overhead**. **Includes LLM time**, not “non-LLM only.” |
-| **`latency_breakdown.llm_ms`** | Server-side wall clock around **`Generate`** inside the gateway (**upstream model only**, after compile). |
-| **`latency_breakdown.compile_total_ms`** | Server-side wall clock around **`CompilePrompt`** (embedding / HNSW / Markdown assembly roll-up). |
-| **`latency_breakdown.compile_embed_ms`** | Time in **`Embed`** at compile time (often close to **`compile_total`** when index + assembly are sub‑millisecond). |
+| Metric | P50 | P95 | P99 |
+|--------|----:|----:|----:|
+| Naive baseline LLM | 9.9 s | 12.8 s | 13.5 s |
+| ACGC `Run` client RTT | 9.9 s | **11.1 s** | **11.2 s** |
+| ACGC `llm_ms` (server) | **8.6 s** | 10.6 s | 10.7 s |
+| ACGC `compile_total_ms` | 0.76 s | 1.5 s | 1.5 s |
 
-**Percentiles:**
-
-| Stat | Plain-language meaning |
-|------|-------------------------|
-| **P50** | **Median** — half of samples are faster, half slower (“typical” run). |
-| **P95** | **Tail** — 95% of samples finish within this time; captures noisy providers / contention. |
-| **P99** | **Extreme tail** — rare slow runs (GC spikes, slow embeds, API stalls). |
-
-The harness applies **`-discard-n N`** by dropping the **first N iterations by index** from percentile summaries only (burn-in); raw **`samples`** still list every iteration.
-
-#### Major driver (what dominates latency)
-
-Inside a successful **`Run`**, **`llm_ms` ≫ `compile_total_ms`** in typical setups: **upstream LLM generation is the largest component**. Compile adds **hundreds of ms to a few seconds** on semantic paths; **`run_round_trip` ≈ `compile_total_ms` + `llm_ms`** (+ small slack).
-
-Baseline **`baseline_llm_ms`** vs server **`llm_ms`** are **not identical prompts** (verbatim transcript vs compiled **`FinalPrompt` + probe framing), so **longer `llm_ms` does not imply a timer bug** — it usually means **different prompt/output workload**.
-
-#### Recorded example run (reference numbers)
-
-Below is one **representative** bench captured **2026-05-14**: **`localhost:50051`**, **`iterations=30`**, **`discard_n=5`**, **`concurrency=2`**, default embedded fixture (**2 warm pairs**, probe about **`go.mod` `replace` directives**), **`ACGC_LATENCY_BREAKDOWN=true`**, model **`gpt-5`** via OpenAI-compatible API. **Two iterations** hit transient **`connection reset by peer`** errors and are **excluded** from the percentile aggregates below.
-
-**End-to-end comparison** — naive vs full **`Run`** (**both include baseline-side LLM only on the baseline column**; ACGC column is **full RPC** including compile **and** server LLM):
-
-| Metric | P50 (median) | P95 (tail) | P99 (extreme tail) |
-|--------|-------------:|-----------:|-------------------:|
-| Naive baseline LLM wall | 9.3 s | 15.0 s | 18.1 s |
-| ACGC **`Run`** client RTT | 11.6 s | 19.2 s | 22.0 s |
-| **Net Δ** (ACGC − baseline) | **+2.3 s** | **+4.2 s** | **+3.8 s** |
-
-**Inside ACGC `Run`** (server **`latency_breakdown`** — same percentile basis):
-
-| Component | P50 | P95 | P99 |
-|-----------|----:|----:|----:|
-| **`llm_ms`** (upstream completion) | 11.2 s | 18.8 s | 21.2 s |
-| **`compile_total_ms`** | 0.65 s | 1.05 s | 2.39 s |
-
-**Takeaway:** On this fixture, **`Run`** was **~2–4 s slower at median/tail** than sending the naive transcript once; **most of wall clock inside `Run` is still `llm_ms`**. Your numbers will vary with **model**, **network**, **`warm-settle-delay`**, and **`discard_n`**.
+**Takeaway:** Upstream LLM time still dominates, but ACGC sends a **smaller compiled prompt**, so **`llm_ms` is lower** than the naive full-transcript call. That token savings often **offsets compile cost** (~0.8 s here): end-to-end was **tied at P50** and **faster at P95/P99**. On a shorter 3-iteration smoke of the same setup, ACGC RTT won at P50 as well (~10.5 s vs ~12.1 s). Numbers vary with model, network, and fixture size.
 
 ### Prompt prefix cache evaluation (`acgc-cachebench`)
 
